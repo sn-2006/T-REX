@@ -2,7 +2,7 @@ export default function DashboardHeader({ session, roleLabel, onLogout, children
   return (
     <header className="app-header dashboard-header">
       <div>
-        <div className="brand">ChainTDS</div>
+        <div className="brand">T-REX</div>
         <span className="muted small">{roleLabel}</span>
       </div>
 

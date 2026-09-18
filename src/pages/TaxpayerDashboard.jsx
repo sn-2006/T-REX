@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import QRCode from "qrcode";
 import { parseExchangeCSV } from "../utils/parseExchange";
+import { SUPPORTED_API_EXCHANGES, fetchExchangeTransactions } from "../adapters";
 import { reconcile } from "../utils/reconcile";
 import { computeTdsDiscrepancies } from "../utils/tdsDiscrepancy";
 import {
@@ -13,19 +14,40 @@ import { sha256Hex, mockAnchorOnChain } from "../utils/hash";
 import { anchorReportOnChain, isChainConfigured, verifyReportOnChain } from "../utils/blockchain";
 import { buildReportPdf } from "../utils/exportPdf";
 import { mockWalletTransfers } from "../utils/walletMock";
-import { upsertCase, nextAuditorAssignment, deriveStatus } from "../data/caseStore";
+import { fetchWalletTransfers, isWalletApiConfigured } from "../adapters/walletAdapter";
+import { upsertCase, deriveStatus } from "../data/caseStore";
+import { apiFetch } from "../api/client";
+import { fetchVerificationStatus } from "../api/verification";
+import VerifyAccountPage from "./VerifyAccountPage";
 import AIInsightsPanel from "../components/AIInsightsPanel";
 import DiscrepancyCard from "../components/DiscrepancyCard";
 import TransactionInvestigator from "../components/TransactionInvestigator";
 import TransactionFlowGraph from "../components/TransactionFlowGraph";
 import LoadingScreen from "../components/LoadingTemp";
 import DashboardHeader from "../components/DashboardHeader";
+import { getFriendlyBlockchainMessage } from "../utils/friendlyMessage";
+import PowerBIAnalytics from "../components/PowerBIAnalytics";
 
 const STEPS = ["upload", "results", "report"];
 let nextId = 1;
 
 function newExchange(name = "") {
-  return { id: nextId++, name, file: null };
+  return {
+    id: nextId++,
+    name,
+    // "csv" (existing flow) or "api" (new — fetched via an exchange adapter).
+    source: "csv",
+    file: null,
+    // API-mode fields:
+    apiExchangeKey: SUPPORTED_API_EXCHANGES[0].key,
+    apiKey: "",
+    apiSecret: "",
+    startDate: "",
+    endDate: "",
+    rows: null, // normalized rows once a fetch succeeds
+    fetching: false,
+    fetchError: "",
+  };
 }
 function newWallet() {
   return { id: nextId++, address: "" };
@@ -40,6 +62,30 @@ export default function TaxpayerDashboard({ session, onLogout }) {
   const [wallets, setWallets] = useState([newWallet()]);
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState("");
+
+  // Gate: a taxpayer must verify their email and pass KYC before they can
+  // reach the upload flow at all — not just before the final "generate
+  // report" click. null means "still checking"; the backend enforces this
+  // too (see POST /api/cases), this is just so the UI doesn't let someone
+  // walk through three steps of work before finding out it'll be rejected.
+  const [verifyStatus, setVerifyStatus] = useState(null);
+  const [verifyStatusError, setVerifyStatusError] = useState("");
+
+  useEffect(() => {
+    refreshVerifyStatus();
+  }, []);
+
+  async function refreshVerifyStatus() {
+    try {
+      setVerifyStatus(await fetchVerificationStatus());
+      setVerifyStatusError("");
+    } catch (e) {
+      setVerifyStatusError(e.message || "Couldn't check your verification status.");
+    }
+  }
+
+  const isFullyVerified =
+    verifyStatus && verifyStatus.emailVerified && verifyStatus.kycStatus === "verified";
 
   const [reconciliation, setReconciliation] = useState(null);
   const [narrative, setNarrative] = useState("");
@@ -80,15 +126,61 @@ export default function TaxpayerDashboard({ session, onLogout }) {
     });
   }
 
+  // Switches an exchange slot between "Upload CSV" and "Connect via API".
+  // Clears whatever the other mode had staged, so stale data can't leak
+  // into a reconciliation run through the mode the user isn't using.
+  function setExchangeSource(id, source) {
+    updateExchange(id, {
+      source,
+      file: null,
+      rows: null,
+      fetchError: "",
+      name: source === "api" ? SUPPORTED_API_EXCHANGES[0].label : "",
+    });
+  }
+
+  // Calls the mock adapter for this exchange slot's selected exchange +
+  // date range, and stores the normalized rows directly on the slot —
+  // same normalized shape parseExchangeCSV produces, so runReconciliation
+  // doesn't need to know or care which source it came from.
+  async function fetchExchangeApi(id) {
+    const ex = exchanges.find((e) => e.id === id);
+    if (!ex) return;
+
+    if (!ex.startDate || !ex.endDate) {
+      updateExchange(id, { fetchError: "Pick a start and end date first." });
+      return;
+    }
+    if (ex.startDate > ex.endDate) {
+      updateExchange(id, { fetchError: "Start date must be before end date." });
+      return;
+    }
+
+    updateExchange(id, { fetching: true, fetchError: "", rows: null });
+
+    try {
+      const rows = await fetchExchangeTransactions(ex.apiExchangeKey, {
+        apiKey: ex.apiKey,
+        apiSecret: ex.apiSecret,
+        startDate: ex.startDate,
+        endDate: ex.endDate,
+      });
+      updateExchange(id, { rows, fetching: false });
+    } catch (e) {
+      updateExchange(id, { fetching: false, fetchError: e.message || "Fetch failed." });
+    }
+  }
+
   async function runReconciliation() {
     setError("");
 
     const missingName = exchanges.some((ex) => !ex.name.trim());
-    const missingFile = exchanges.some((ex) => !ex.file);
+    const missingCsv = exchanges.some((ex) => ex.source === "csv" && !ex.file);
+    const missingApiRows = exchanges.some((ex) => ex.source === "api" && !ex.rows);
 
-    if (missingName || missingFile) {
+    if (missingName || missingCsv || missingApiRows) {
       setError(
-        "Give every exchange a name and upload its statement file (or load sample data) to continue."
+        "Give every exchange a name, and either upload its statement file or fetch its transactions via API, to continue."
       );
       return;
     }
@@ -97,14 +189,46 @@ export default function TaxpayerDashboard({ session, onLogout }) {
 
     try {
       const parsedGroups = await Promise.all(
-        exchanges.map(async (ex) => parseExchangeCSV(await ex.file.text(), ex.name.trim()))
+        exchanges.map(async (ex) =>
+          ex.source === "api" ? ex.rows : parseExchangeCSV(await ex.file.text(), ex.name.trim())
+        )
       );
 
-      const walletRows = wallets
-        .filter((w) => w.address.trim())
-        .flatMap((w) => mockWalletTransfers(w.address.trim()));
+      const walletAddresses = wallets.map((w) => w.address.trim()).filter(Boolean);
 
-      const allRows = [...parsedGroups.flat(), ...walletRows];
+      let walletRows = [];
+      if (walletAddresses.length) {
+        if (isWalletApiConfigured) {
+          try {
+            walletRows = (
+              await Promise.all(walletAddresses.map((addr) => fetchWalletTransfers(addr)))
+            ).flat();
+          } catch (walletErr) {
+            console.error(walletErr);
+            const err = new Error(
+              walletErr.message ||
+                "Couldn't fetch one of the wallets — check the address and try again."
+            );
+            err.isWalletFetchError = true;
+            throw err;
+          }
+        } else {
+          walletRows = walletAddresses.flatMap((addr) => mockWalletTransfers(addr));
+        }
+      }
+
+      const rawRows = [...parsedGroups.flat(), ...walletRows];
+
+      // Send the normalized ledger through the backend compliance engine.
+      // The server performs VDA-transfer classification, consideration
+      // determination and deterministic 194S/TDS gating. The frontend keeps
+      // reconciliation/UI rendering unchanged and consumes the authoritative
+      // classified rows returned by the backend.
+      const complianceResult = await apiFetch("/compliance/analyze", {
+        method: "POST",
+        body: { rows: rawRows },
+      });
+      const allRows = complianceResult.rows;
 
       const result = reconcile(allRows);
 
@@ -127,7 +251,11 @@ export default function TaxpayerDashboard({ session, onLogout }) {
       setStep("results");
     } catch (e) {
       console.error(e);
-      setError("Couldn't parse one of the files — check the CSV format and try again.");
+      setError(
+        e.isWalletFetchError
+          ? e.message
+          : "Couldn't parse one of the files — check the CSV format and try again."
+      );
     } finally {
       setProcessing(false);
     }
@@ -158,12 +286,10 @@ export default function TaxpayerDashboard({ session, onLogout }) {
       );
 
       // Register this report as a case for the Auditor / Regulator dashboards.
-      upsertCase({
+      // The server identifies the owning taxpayer from the auth token, and
+      // assigns an auditor round-robin itself — no need to pass either here.
+      await upsertCase({
         id: hash,
-        taxpayerId: session.id,
-        taxpayerName: session.name,
-        panMasked: session.panMasked || session.id,
-        auditorId: nextAuditorAssignment(),
         exchanges: exchanges.map((ex) => ex.name.trim()),
         wallets: wallets.filter((w) => w.address.trim()).map((w) => w.address.trim()),
         allRows: allTransactionRows,
@@ -187,7 +313,7 @@ export default function TaxpayerDashboard({ session, onLogout }) {
     } catch (e) {
       console.error(e);
       setError(
-        e.message || "Couldn't anchor the report — check your wallet/network and try again."
+        getFriendlyBlockchainMessage(e)
       );
     } finally {
       setProcessing(false);
@@ -233,26 +359,60 @@ export default function TaxpayerDashboard({ session, onLogout }) {
       ) : (
         <>
           <DashboardHeader session={session} roleLabel="Taxpayer dashboard" onLogout={onLogout}>
-            <nav className="steps">
-              {STEPS.map((s, i) => (
-                <div
-                  key={s}
-                  className={`step-pill ${step === s ? "active" : ""} ${
-                    STEPS.indexOf(step) > i ? "done" : ""
-                  }`}
-                >
-                  {i + 1}. {s[0].toUpperCase() + s.slice(1)}
-                </div>
-              ))}
-            </nav>
+            {isFullyVerified && (
+              <nav className="steps">
+                {STEPS.map((s, i) => {
+                  // A step is reachable if its data already exists — "results"
+                  // needs a completed reconciliation, "report" needs a
+                  // finalized/anchored report. "upload" is always reachable so
+                  // the person can start over. This lets someone freely switch
+                  // back and forth between tabs they've already unlocked,
+                  // instead of only ever moving forward.
+                  const reachable =
+                    s === "upload" ||
+                    (s === "results" && !!reconciliation) ||
+                    (s === "report" && !!anchor);
+                  return (
+                    <button
+                      type="button"
+                      key={s}
+                      className={`step-pill ${step === s ? "active" : ""} ${
+                        STEPS.indexOf(step) > i ? "done" : ""
+                      } ${reachable ? "" : "step-pill-disabled"}`}
+                      onClick={() => reachable && setStep(s)}
+                      disabled={!reachable}
+                    >
+                      {i + 1}. {s[0].toUpperCase() + s.slice(1)}
+                    </button>
+                  );
+                })}
+              </nav>
+            )}
           </DashboardHeader>
 
           <main className="app-main">
+            {!verifyStatus ? (
+              <section className="card">
+                {verifyStatusError ? (
+                  <>
+                    <div className="error">{verifyStatusError}</div>
+                    <button className="secondary-btn" onClick={refreshVerifyStatus}>
+                      Try again
+                    </button>
+                  </>
+                ) : (
+                  <p className="muted">Checking your account status...</p>
+                )}
+              </section>
+            ) : !isFullyVerified ? (
+              <VerifyAccountPage status={verifyStatus} onStatusChange={refreshVerifyStatus} />
+            ) : (
+              <>
             {step === "upload" && (
               <section className="card">
                 <h1>Reconcile TDS across exchanges</h1>
                 <p className="muted">
-                  Name each exchange and upload its statement. ChainTDS checks whether TDS is
+                  Name each exchange and upload its statement. T-REX checks whether TDS is
                   correctly accounted for when assets move between them — the gap no single
                   platform can see on its own.
                 </p>
@@ -261,13 +421,17 @@ export default function TaxpayerDashboard({ session, onLogout }) {
                   {exchanges.map((ex, i) => (
                     <div className="upload-box" key={ex.id}>
                       <div className="upload-box-header">
-                        <input
-                          className="name-input"
-                          type="text"
-                          placeholder={`Exchange ${i + 1} name`}
-                          value={ex.name}
-                          onChange={(e) => updateExchange(ex.id, { name: e.target.value })}
-                        />
+                        {ex.source === "csv" ? (
+                          <input
+                            className="name-input"
+                            type="text"
+                            placeholder={`Exchange ${i + 1} name`}
+                            value={ex.name}
+                            onChange={(e) => updateExchange(ex.id, { name: e.target.value })}
+                          />
+                        ) : (
+                          <div className="name-input readonly-name">{ex.name}</div>
+                        )}
                         {exchanges.length > 2 && (
                           <button className="link-btn danger" onClick={() => removeExchange(ex.id)}>
                             Remove
@@ -275,28 +439,145 @@ export default function TaxpayerDashboard({ session, onLogout }) {
                         )}
                       </div>
 
-                      <input
-                        type="file"
-                        accept=".csv"
-                        onChange={(e) =>
-                          updateExchange(ex.id, { file: e.target.files?.[0] || ex.file })
-                        }
-                      />
-
-                      {ex.file && <div className="filename">{ex.file.name}</div>}
-
-                      {i < 2 && (
+                      <div className="source-toggle" role="tablist">
                         <button
-                          className="link-btn"
-                          onClick={() =>
-                            loadSample(
-                              ex.id,
-                              i === 0 ? "/sample-exchange-a.csv" : "/sample-exchange-b.csv"
-                            )
-                          }
+                          type="button"
+                          className={`toggle-btn ${ex.source === "csv" ? "active" : ""}`}
+                          onClick={() => setExchangeSource(ex.id, "csv")}
                         >
-                          Use sample data
+                          Upload CSV
                         </button>
+                        <button
+                          type="button"
+                          className={`toggle-btn ${ex.source === "api" ? "active" : ""}`}
+                          onClick={() => setExchangeSource(ex.id, "api")}
+                        >
+                          Connect via API
+                        </button>
+                      </div>
+
+                      {ex.source === "csv" ? (
+                        <>
+                          <input
+                            type="file"
+                            accept=".csv"
+                            onChange={(e) =>
+                              updateExchange(ex.id, { file: e.target.files?.[0] || ex.file })
+                            }
+                          />
+
+                          {ex.file && <div className="filename">{ex.file.name}</div>}
+
+                          {i < 2 && (
+                            <button
+                              className="link-btn"
+                              onClick={() =>
+                                loadSample(
+                                  ex.id,
+                                  i === 0 ? "/sample-exchange-a.csv" : "/sample-exchange-b.csv"
+                                )
+                              }
+                            >
+                              Use sample data
+                            </button>
+                          )}
+                        </>
+                      ) : (
+                        <div className="api-connect-form">
+                          <label className="field-label">
+                            Exchange
+                            <select
+                              value={ex.apiExchangeKey}
+                              onChange={(e) => {
+                                const key = e.target.value;
+                                const label = SUPPORTED_API_EXCHANGES.find(
+                                  (x) => x.key === key
+                                )?.label;
+                                updateExchange(ex.id, {
+                                  apiExchangeKey: key,
+                                  name: label,
+                                  rows: null,
+                                  fetchError: "",
+                                });
+                              }}
+                            >
+                              {SUPPORTED_API_EXCHANGES.map((x) => (
+                                <option key={x.key} value={x.key}>
+                                  {x.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <label className="field-label">
+                            API key
+                            <input
+                              type="text"
+                              placeholder="Read-only API key"
+                              value={ex.apiKey}
+                              onChange={(e) =>
+                                updateExchange(ex.id, { apiKey: e.target.value, rows: null })
+                              }
+                            />
+                          </label>
+
+                          <label className="field-label">
+                            API secret
+                            <input
+                              type="password"
+                              placeholder="API secret"
+                              value={ex.apiSecret}
+                              onChange={(e) =>
+                                updateExchange(ex.id, { apiSecret: e.target.value, rows: null })
+                              }
+                            />
+                          </label>
+
+                          <div className="date-range-row">
+                            <label className="field-label">
+                              From
+                              <input
+                                type="date"
+                                value={ex.startDate}
+                                onChange={(e) =>
+                                  updateExchange(ex.id, { startDate: e.target.value, rows: null })
+                                }
+                              />
+                            </label>
+                            <label className="field-label">
+                              To
+                              <input
+                                type="date"
+                                value={ex.endDate}
+                                onChange={(e) =>
+                                  updateExchange(ex.id, { endDate: e.target.value, rows: null })
+                                }
+                              />
+                            </label>
+                          </div>
+
+                          <button
+                            type="button"
+                            className="secondary-btn"
+                            onClick={() => fetchExchangeApi(ex.id)}
+                            disabled={ex.fetching}
+                          >
+                            {ex.fetching ? "Fetching..." : "Fetch transactions"}
+                          </button>
+
+                          {ex.fetchError && <div className="error small">{ex.fetchError}</div>}
+
+                          {ex.rows && !ex.fetching && (
+                            <div className="filename">
+                              ✓ Fetched {ex.rows.length} transactions from {ex.name}
+                            </div>
+                          )}
+
+                          <p className="muted small">
+                            Demo mode: this returns realistic sample data shaped like{" "}
+                            {ex.name}'s real API response — no live account is contacted.
+                          </p>
+                        </div>
                       )}
                     </div>
                   ))}
@@ -339,8 +620,9 @@ export default function TaxpayerDashboard({ session, onLogout }) {
                 </button>
 
                 <p className="muted small" style={{ marginTop: 16 }}>
-                  Wallet transfers are simulated in this prototype; real reads come from
-                  Alchemy in the full build.
+                  {isWalletApiConfigured
+                    ? "Wallet transfers are fetched live from the chain via Alchemy when you run reconciliation."
+                    : "Wallet transfers are simulated in this prototype — set VITE_WALLET_RPC_URL to fetch real transfers via Alchemy."}
                 </p>
 
                 {error && <div className="error">{error}</div>}
@@ -354,6 +636,13 @@ export default function TaxpayerDashboard({ session, onLogout }) {
             {step === "results" && reconciliation && (
               <section className="card">
                 <h1>Reconciliation results</h1>
+
+                <PowerBIAnalytics
+                  allRows={allTransactionRows}
+                  discrepancies={discrepancies}
+                  reconciliation={reconciliation}
+                  role="taxpayer"
+                />
 
                 {insights && (
                   <AIInsightsPanel
@@ -464,23 +753,25 @@ export default function TaxpayerDashboard({ session, onLogout }) {
                   </>
                 )}
 
-                {discrepancies.length > 0 && (
-                  <>
-                    <h3>TDS discrepancies</h3>
-                    <div className="discrepancy-list">
-                      {discrepancies.map((d, i) => (
-                        <DiscrepancyCard
-                          key={i}
-                          discrepancy={d}
-                          evidence={buildDiscrepancyEvidence(d, {
-                            reconciliation,
-                            allRows: allTransactionRows,
-                          })}
-                        />
-                      ))}
-                    </div>
-                  </>
-                )}
+                {discrepancies.filter((d) => d.hasTdsDiscrepancy === true).length > 0 && (
+  <>
+    <h3>TDS discrepancies</h3>
+    <div className="discrepancy-list">
+      {discrepancies
+        .filter((d) => d.hasTdsDiscrepancy === true)
+        .map((d, i) => (
+          <DiscrepancyCard
+            key={i}
+            discrepancy={d}
+            evidence={buildDiscrepancyEvidence(d, {
+              reconciliation,
+              allRows: allTransactionRows,
+            })}
+          />
+        ))}
+    </div>
+  </>
+)}
 
                 <h3>AI-generated summary</h3>
                 <pre className="narrative">{narrative}</pre>
@@ -540,6 +831,8 @@ export default function TaxpayerDashboard({ session, onLogout }) {
                   Start a new reconciliation
                 </button>
               </section>
+            )}
+              </>
             )}
           </main>
         </>

@@ -21,7 +21,9 @@ export function buildComplianceInsights({ allRows, reconciliation, discrepancies
   const probableTransfers = transferChecks.filter((t) => t.confidence >= 60 && t.confidence < 90).length;
   const unmatchedTransactions =
     warnings.filter((w) => w.type === "ORPHANED_WITHDRAWAL").length + unmatchedDeposits.length;
-  const tdsDiscrepancyCount = discrepancies.length;
+  const tdsDiscrepancyCount = discrepancies.filter(
+  (d) => d.hasTdsDiscrepancy === true
+).length;
   const highRiskCount = discrepancies.filter((d) => d.riskTier === "high").length;
 
   // Overall compliance confidence: a simple, fully deterministic blend of
@@ -83,6 +85,11 @@ export function buildDiscrepancyEvidence(discrepancy, { reconciliation, allRows 
     sourceExchange: discrepancy.exchange,
     destinationExchange: relatedTransfer ? relatedTransfer.to : null,
     amount: discrepancy.inrValue,
+    consideration: discrepancy.consideration,
+    transactionClassification: discrepancy.transactionClassification,
+    vdaTransferStatus: discrepancy.vdaTransferStatus,
+    transferType: discrepancy.transferType,
+    transferConfidence: discrepancy.transferConfidence,
     expectedTds: discrepancy.expectedTds,
     reportedTds: discrepancy.reportedTds,
     reportedSource: discrepancy.reportedSource,

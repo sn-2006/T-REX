@@ -1,72 +1,54 @@
 // ---------------------------------------------------------------------------
-// Mock authentication layer.
+// Authentication layer — now backed by the real ChainTDS API (see /server)
+// instead of a mocked, frontend-only directory.
 //
-// ChainTDS is a frontend-only prototype, so there's no real backend to
-// authenticate against. This module fakes just enough of one to make the
-// three-role login flow demoable:
-//   - Auditors and Regulators are internal roles, so they're checked
-//     against a small fixed demo directory below.
-//   - Taxpayers aren't pre-known to the system (anyone can be a taxpayer),
-//     so a taxpayer "logs in" by identifying themselves with a PAN + name;
-//     that PAN becomes their durable case identity across sessions.
+//   - Auditors and Regulators are internal roles: their accounts must
+//     already exist in the database (created via `npm run seed` in
+//     /server, or by hand) — login only, no self-registration.
+//   - Taxpayers aren't pre-known to the system, so a taxpayer "logs in" by
+//     identifying themselves with a PAN + name + password; the backend
+//     creates that account on first login and checks the password on every
+//     login after that.
 //
-// Session is persisted to localStorage so a refresh doesn't kick the user
-// back to the login screen.
+// The JWT the server issues is stored alongside the session so every
+// authenticated request (see src/api/client.js) can attach it. Session is
+// also persisted to localStorage so a refresh doesn't kick the user back to
+// the login screen.
 // ---------------------------------------------------------------------------
+
+import { apiFetch, setToken, clearToken } from "../api/client.js";
 
 const SESSION_KEY = "chaintds_session_v1";
 
-export const DEMO_AUDITORS = [
-  { id: "AUD001", password: "auditor123", name: "Priya Nair" },
-  { id: "AUD002", password: "auditor123", name: "Karan Mehta" },
-];
-
-export const DEMO_REGULATORS = [
-  { id: "REG001", password: "regulator123", name: "CBDT Regulatory Desk" },
-];
-
-export function loginTaxpayer({ pan, name, password }) {
-  const cleanPan = (pan || "").trim().toUpperCase();
-  if (!cleanPan || cleanPan.length < 4) {
-    throw new Error("Enter a valid PAN to continue.");
-  }
-  if (!name || !name.trim()) {
-    throw new Error("Enter your name to continue.");
-  }
-  if (!password || password.length < 4) {
-    throw new Error("Password must be at least 4 characters.");
-  }
-
-  const session = {
-    role: "taxpayer",
-    id: cleanPan,
-    panMasked: cleanPan,
-    name: name.trim(),
-  };
+export async function loginTaxpayer({ pan, name, password, region, email }) {
+  const { token, session } = await apiFetch("/auth/taxpayer", {
+    method: "POST",
+    body: { pan, name, password, region, email },
+    auth: false,
+  });
+  setToken(token);
   persistSession(session);
   return session;
 }
 
-export function loginAuditor({ id, password }) {
-  const match = DEMO_AUDITORS.find(
-    (a) => a.id.toLowerCase() === (id || "").trim().toLowerCase()
-  );
-  if (!match || match.password !== password) {
-    throw new Error("Invalid auditor ID or password.");
-  }
-  const session = { role: "auditor", id: match.id, name: match.name };
+export async function loginAuditor({ id, password }) {
+  const { token, session } = await apiFetch("/auth/auditor", {
+    method: "POST",
+    body: { id, password },
+    auth: false,
+  });
+  setToken(token);
   persistSession(session);
   return session;
 }
 
-export function loginRegulator({ id, password }) {
-  const match = DEMO_REGULATORS.find(
-    (r) => r.id.toLowerCase() === (id || "").trim().toLowerCase()
-  );
-  if (!match || match.password !== password) {
-    throw new Error("Invalid regulator ID or password.");
-  }
-  const session = { role: "regulator", id: match.id, name: match.name };
+export async function loginRegulator({ id, password }) {
+  const { token, session } = await apiFetch("/auth/regulator", {
+    method: "POST",
+    body: { id, password },
+    auth: false,
+  });
+  setToken(token);
   persistSession(session);
   return session;
 }
@@ -86,4 +68,5 @@ export function getSession() {
 
 export function logout() {
   localStorage.removeItem(SESSION_KEY);
+  clearToken();
 }

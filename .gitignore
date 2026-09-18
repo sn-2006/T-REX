@@ -1,45 +1,11 @@
-# Dependencies
 node_modules/
-**/node_modules/
-
-# Environment variables and secrets
+dist/
 .env
 .env.*
 !.env.example
-!.env.*.example
-
-# Build output
-dist/
-**/dist/
-build/
-**/build/
-
-# Hardhat generated files
-blockchain/artifacts/
-blockchain/cache/
-blockchain/coverage/
-
-# Logs
+server/.env
+blockchain/.env
+.vercel/
 *.log
-npm-debug.log*
-yarn-debug.log*
-pnpm-debug.log*
-
-# Editor files
-.vscode/
-.idea/
-
-# Operating system files
+*.dump
 .DS_Store
-Thumbs.db
-
-# Temporary files
-*.tmp
-*.temp
-
-# Test coverage
-coverage/
-
-# Local uploads or generated files
-uploads/
-output/

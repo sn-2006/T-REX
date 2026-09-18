@@ -1,15 +1,51 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { loadCases } from "../data/caseStore";
 import { computeAllTdsRows } from "../utils/tdsDiscrepancy";
 import DashboardHeader from "../components/DashboardHeader";
 import CaseDetail from "../components/CaseDetail";
+import PowerBIAnalytics from "../components/PowerBIAnalytics";
+
+const STATUS_LABEL = {
+  pending: "pending review",
+  "high-risk": "flagged as high risk",
+  verified: "verified",
+  flagged: "flagged for follow-up",
+};
 
 export default function RegulatorDashboard({ session, onLogout }) {
-  const [cases] = useState(() => loadCases());
+  const [cases, setCases] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [selectedId, setSelectedId] = useState(null);
+  const [regionFilter, setRegionFilter] = useState("all");
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    loadCases()
+      .then((data) => !cancelled && setCases(data))
+      .catch((e) => !cancelled && setError(e.message || "Couldn't load cases."))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const selected = cases.find((c) => c.id === selectedId) || null;
   const stats = useMemo(() => computeAnalytics(cases), [cases]);
+  const regions = useMemo(
+    () => Array.from(new Set(cases.map((c) => c.taxpayerRegion).filter(Boolean))).sort(),
+    [cases]
+  );
+  const regionFilteredCases = useMemo(
+    () => (regionFilter === "all" ? cases : cases.filter((c) => c.taxpayerRegion === regionFilter)),
+    [cases, regionFilter]
+  );
+
+  function handleStatusPillClick(e, c) {
+    e.stopPropagation();
+    window.alert(`${c.taxpayerName}'s case is ${STATUS_LABEL[c.status] || c.status}.`);
+  }
 
   return (
     <div className="app app-wide">
@@ -27,8 +63,10 @@ export default function RegulatorDashboard({ session, onLogout }) {
           <>
             <section className="card">
               <h1>National compliance overview</h1>
+              {error && <div className="error">{error}</div>}
+              {loading && <p className="muted">Loading cases...</p>}
               <p className="muted">
-                Read-only, aggregated across every taxpayer report ChainTDS has processed.
+                Read-only, aggregated across every taxpayer report T-REX has processed.
               </p>
 
               <div className="ai-stats-grid regulator-stats-grid">
@@ -45,6 +83,44 @@ export default function RegulatorDashboard({ session, onLogout }) {
                 <Stat label="High-risk cases" value={stats.highRiskCount} risk={stats.highRiskCount > 0} />
                 <Stat label="Unmatched transfers" value={stats.unmatchedCount} risk={stats.unmatchedCount > 0} />
               </div>
+            </section>
+
+            <PowerBIAnalytics cases={regionFilteredCases} discrepancies={regionFilteredCases.flatMap((c) => c.discrepancies || [])} role="regulator" />
+
+            <section className="card">
+              <h3 style={{ marginTop: 0 }}>Region-wise compliance</h3>
+              <p className="muted small">Taxpayers grouped by the region they registered under.</p>
+              {stats.regionRows.length === 0 && (
+                <p className="muted">No region data yet — taxpayers select a region at signup.</p>
+              )}
+              {stats.regionRows.length > 0 && (
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Region</th>
+                      <th>Taxpayers</th>
+                      <th>Reports</th>
+                      <th>Expected TDS</th>
+                      <th>Reported TDS</th>
+                      <th>Coverage</th>
+                      <th>High-risk cases</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stats.regionRows.map((r) => (
+                      <tr key={r.region} className={r.coverage < 70 ? "row-flag" : ""}>
+                        <td>{r.region}</td>
+                        <td>{r.taxpayers}</td>
+                        <td>{r.reports}</td>
+                        <td>₹{r.expectedTds.toLocaleString("en-IN")}</td>
+                        <td>₹{r.reportedTds.toLocaleString("en-IN")}</td>
+                        <td>{r.coverage}%</td>
+                        <td>{r.highRiskCount}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </section>
 
             <section className="card">
@@ -94,7 +170,13 @@ export default function RegulatorDashboard({ session, onLogout }) {
                       <span className="muted small">
                         {c.discrepancies.filter((d) => d.riskTier === "high").length} high-risk item(s)
                       </span>
-                      <span className={`case-status-pill case-status-${c.status}`}>{c.status}</span>
+                      <span
+                        className={`case-status-pill case-status-${c.status}`}
+                        onClick={(e) => handleStatusPillClick(e, c)}
+                        title="Click for what this status means"
+                      >
+                        {c.status}
+                      </span>
                     </div>
                   </button>
                 ))}
@@ -116,17 +198,38 @@ export default function RegulatorDashboard({ session, onLogout }) {
             </section>
 
             <section className="card">
-              <h3 style={{ marginTop: 0 }}>All reports</h3>
+              <div className="regulator-reports-header">
+                <h3 style={{ marginTop: 0 }}>All reports</h3>
+                <label className="field-label region-filter">
+                  Region
+                  <select value={regionFilter} onChange={(e) => setRegionFilter(e.target.value)}>
+                    <option value="all">All regions</option>
+                    {regions.map((r) => (
+                      <option key={r} value={r}>{r}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
               <div className="case-list">
-                {cases.map((c) => (
+                {regionFilteredCases.length === 0 && (
+                  <p className="muted">No reports for this region yet.</p>
+                )}
+                {regionFilteredCases.map((c) => (
                   <button key={c.id} className="case-row" onClick={() => setSelectedId(c.id)}>
                     <div>
                       <strong>{c.taxpayerName}</strong>
                       <span className="muted small"> · PAN {c.panMasked}</span>
+                      {c.taxpayerRegion && <span className="muted small"> · {c.taxpayerRegion}</span>}
                       <div className="muted small">{c.exchanges.join(", ")}</div>
                     </div>
                     <div className="case-row-right">
-                      <span className={`case-status-pill case-status-${c.status}`}>{c.status}</span>
+                      <span
+                        className={`case-status-pill case-status-${c.status}`}
+                        onClick={(e) => handleStatusPillClick(e, c)}
+                        title="Click for what this status means"
+                      >
+                        {c.status}
+                      </span>
                     </div>
                   </button>
                 ))}
@@ -159,6 +262,7 @@ function computeAnalytics(cases) {
   let unmatchedCount = 0;
 
   const exchangeMap = {};
+  const regionMap = {};
   const highRiskCases = [];
   const unmatchedRows = [];
 
@@ -166,6 +270,23 @@ function computeAnalytics(cases) {
     const tdsRows = computeAllTdsRows(c.allRows);
     totalExpectedTds += tdsRows.reduce((s, r) => s + r.expectedTds, 0);
     totalReportedTds += tdsRows.reduce((s, r) => s + r.reportedTds, 0);
+
+    const region = c.taxpayerRegion || "Unspecified";
+    if (!regionMap[region]) {
+      regionMap[region] = {
+        region,
+        taxpayers: new Set(),
+        reports: 0,
+        expectedTds: 0,
+        reportedTds: 0,
+        highRiskCount: 0,
+      };
+    }
+    const rg = regionMap[region];
+    rg.taxpayers.add(c.taxpayerId);
+    rg.reports += 1;
+    rg.expectedTds += tdsRows.reduce((s, r) => s + r.expectedTds, 0);
+    rg.reportedTds += tdsRows.reduce((s, r) => s + r.reportedTds, 0);
 
     for (const r of tdsRows) {
       if (!exchangeMap[r.exchange]) {
@@ -190,6 +311,7 @@ function computeAnalytics(cases) {
     if (caseHighRisk > 0) {
       highRiskCount += 1;
       highRiskCases.push(c);
+      rg.highRiskCount += 1;
     }
 
     const orphaned = c.reconciliation.warnings.filter((w) => w.type === "ORPHANED_WITHDRAWAL");
@@ -219,6 +341,21 @@ function computeAnalytics(cases) {
         : 100,
   }));
 
+  const regionRows = Object.values(regionMap)
+    .map((r) => ({
+      region: r.region,
+      taxpayers: r.taxpayers.size,
+      reports: r.reports,
+      expectedTds: Math.round(r.expectedTds),
+      reportedTds: Math.round(r.reportedTds),
+      highRiskCount: r.highRiskCount,
+      coverage:
+        r.expectedTds > 0
+          ? Math.round(Math.max(0, Math.min(100, (r.reportedTds / r.expectedTds) * 100)))
+          : 100,
+    }))
+    .sort((a, b) => b.taxpayers - a.taxpayers);
+
   return {
     totalTaxpayers,
     totalReports,
@@ -229,6 +366,7 @@ function computeAnalytics(cases) {
     highRiskCount,
     unmatchedCount,
     exchangeRows,
+    regionRows,
     highRiskCases,
     unmatchedRows,
   };

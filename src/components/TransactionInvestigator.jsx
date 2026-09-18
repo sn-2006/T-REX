@@ -33,7 +33,7 @@ export default function TransactionInvestigator({ flag, evidence }) {
         <div className="ai-explanation">
           <pre className="ai-investigation-text">{result.investigation}</pre>
           <details className="audit-trail">
-            <summary>Audit trail — evidence used</summary>
+            <summary>Evidence used</summary>
             <ul>
               {result.evidenceUsed.map((e, i) => (
                 <li key={i}>✓ {e}</li>

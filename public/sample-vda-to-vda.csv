@@ -1,0 +1,3 @@
+date,type,asset,amount,price,quote_currency,fx_rate_inr,received_asset,received_amount,received_asset_fmv_inr_per_unit,tds_status,tds_amount,ref_id
+2026-06-25,SELL,BTC,0.01,,,,ETH,0.181818,310000,DEDUCTED,563.64,VDA2VDA1001
+2026-06-26,SELL,ETH,0.5,,,,BTC,0.027,5600000,NOT_APPLICABLE,0,VDA2VDA1002

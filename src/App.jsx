@@ -91,7 +91,7 @@ export default function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <div className="brand">ChainTDS</div>
+        <div className="brand">T-REX</div>
       </header>
       <main className="app-main">
         <LandingPage />

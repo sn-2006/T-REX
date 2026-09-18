@@ -1,4 +1,4 @@
-import { BrowserProvider, JsonRpcProvider, Contract } from "ethers";
+import { BrowserProvider, JsonRpcProvider, Contract, parseUnits } from "ethers";
 
 const CONTRACT_ADDRESS = import.meta.env.VITE_CONTRACT_ADDRESS;
 const RPC_URL = import.meta.env.VITE_RPC_URL;
@@ -6,6 +6,14 @@ const CHAIN_ID_HEX = import.meta.env.VITE_CHAIN_ID_HEX || "0x13882"; // defaults
 const CHAIN_NAME = import.meta.env.VITE_CHAIN_NAME || "Polygon Amoy";
 const CURRENCY_SYMBOL = import.meta.env.VITE_CURRENCY_SYMBOL || "POL";
 const EXPLORER_URL = import.meta.env.VITE_EXPLORER_URL || "";
+
+// Polygon networks (Amoy included) enforce their own minimum priority fee —
+// historically 25-30 gwei — no matter what a generic EVM fee-estimation
+// heuristic thinks is reasonable. provider.getFeeData() on Amoy frequently
+// returns a number BELOW that floor, so a relative "+20%" bump on top of an
+// already-too-low estimate is still too low. That's why the failure was
+// consistent (same underpriced number every time) instead of intermittent.
+const MIN_PRIORITY_FEE = parseUnits("30", "gwei");
 
 const ABI = [
   "function anchorReport(bytes32 reportHash) external",
@@ -36,7 +44,11 @@ async function ensureConfiguredNetwork() {
           {
             chainId: CHAIN_ID_HEX,
             chainName: CHAIN_NAME,
-            nativeCurrency: { name: CURRENCY_SYMBOL, symbol: CURRENCY_SYMBOL, decimals: 18 },
+            nativeCurrency: {
+              name: CURRENCY_SYMBOL,
+              symbol: CURRENCY_SYMBOL,
+              decimals: 18,
+            },
             rpcUrls: [RPC_URL],
             blockExplorerUrls: EXPLORER_URL ? [EXPLORER_URL] : [],
           },
@@ -48,6 +60,55 @@ async function ensureConfiguredNetwork() {
   }
 }
 
+/**
+ * Get safe gas settings for the blockchain transaction.
+ *
+ * Adds a 20% safety margin on top of the network's own fee estimate, AND
+ * enforces an absolute minimum priority fee (MIN_PRIORITY_FEE) — Polygon
+ * rejects transactions below its own floor regardless of how generous a
+ * *relative* bump on top of a too-low base estimate is. EIP-1559 networks
+ * use maxFeePerGas/maxPriorityFeePerGas; legacy networks fall back to
+ * gasPrice.
+ */
+async function getSafeGasSettings(provider, contract, reportHash) {
+  const feeData = await provider.getFeeData();
+
+  // Estimate the actual gas required by the contract call.
+  const gasLimit = await contract.anchorReport.estimateGas("0x" + reportHash);
+
+  // Add a 20% safety margin to the estimated gas limit.
+  const safeGasLimit = (gasLimit * 120n) / 100n;
+
+  // Prefer EIP-1559 fee parameters when supported.
+  if (feeData.maxFeePerGas && feeData.maxPriorityFeePerGas) {
+    const bumpedPriority = (feeData.maxPriorityFeePerGas * 120n) / 100n;
+    const safePriorityFeePerGas =
+      bumpedPriority > MIN_PRIORITY_FEE ? bumpedPriority : MIN_PRIORITY_FEE;
+
+    const bumpedMaxFee = (feeData.maxFeePerGas * 120n) / 100n;
+    // maxFeePerGas must always be >= maxPriorityFeePerGas, or the network
+    // rejects the transaction outright no matter how the priority fee
+    // itself was computed.
+    const safeMaxFeePerGas =
+      bumpedMaxFee > safePriorityFeePerGas ? bumpedMaxFee : safePriorityFeePerGas * 2n;
+
+    return {
+      gasLimit: safeGasLimit,
+      maxFeePerGas: safeMaxFeePerGas,
+      maxPriorityFeePerGas: safePriorityFeePerGas,
+    };
+  }
+
+  // Fallback for legacy networks.
+  if (feeData.gasPrice) {
+    const bumpedGasPrice = (feeData.gasPrice * 120n) / 100n;
+    const safeGasPrice = bumpedGasPrice > MIN_PRIORITY_FEE ? bumpedGasPrice : MIN_PRIORITY_FEE;
+    return { gasLimit: safeGasLimit, gasPrice: safeGasPrice };
+  }
+
+  throw new Error("The network did not provide usable gas fee information.");
+}
+
 // Writes the hash on-chain. Requires MetaMask (or another injected wallet)
 // with funds on whichever network is configured. Returns the real tx hash
 // and block number.
@@ -57,20 +118,20 @@ export async function anchorReportOnChain(reportHashHex) {
   }
 
   const provider = new BrowserProvider(window.ethereum);
-  // Request account access FIRST. This is the call that reliably opens/
-  // focuses the MetaMask popup for a site it hasn't connected to yet —
-  // calling wallet_switchEthereumChain before the site is connected can
-  // fail silently (no visible popup) on some MetaMask versions/lock
-  // states, which is why this used to be ordered the other way around.
+
+  // Request account access FIRST.
   await provider.send("eth_requestAccounts", []);
 
+  // Switch to the configured blockchain network.
   await ensureConfiguredNetwork();
 
   const signer = await provider.getSigner();
   const contract = new Contract(CONTRACT_ADDRESS, ABI, signer);
 
-  const bytes32Hash = "0x" + reportHashHex;
-  const tx = await contract.anchorReport(bytes32Hash);
+  // Calculate safe gas/fee settings using current network data, then send
+  // directly — no queue, no buffer, nothing to get out of sync.
+  const gasSettings = await getSafeGasSettings(provider, contract, reportHashHex);
+  const tx = await contract.anchorReport("0x" + reportHashHex, gasSettings);
   const receipt = await tx.wait();
 
   return {
@@ -83,12 +144,16 @@ export async function anchorReportOnChain(reportHashHex) {
   };
 }
 
-// Read-only check — free, no wallet or gas needed. Uses the configured RPC
-// directly so anyone can verify without installing MetaMask.
+// Read-only check — free, no wallet or gas needed.
+// Uses the configured RPC directly so anyone can verify without installing
+// MetaMask.
 export async function verifyReportOnChain(reportHashHex) {
   if (!RPC_URL || !CONTRACT_ADDRESS) {
-    throw new Error("Contract not configured yet — set VITE_CONTRACT_ADDRESS and VITE_RPC_URL.");
+    throw new Error(
+      "Contract not configured yet — set VITE_CONTRACT_ADDRESS and VITE_RPC_URL."
+    );
   }
+
   const provider = new JsonRpcProvider(RPC_URL);
   const contract = new Contract(CONTRACT_ADDRESS, ABI, provider);
 

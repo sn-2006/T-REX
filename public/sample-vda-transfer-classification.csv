@@ -1,0 +1,7 @@
+date,type,asset,asset_type,amount,price,quote_currency,fx_rate_inr,received_asset,received_asset_type,received_amount,received_asset_fmv_inr_per_unit,source_owner,destination_owner,tds_status,tds_amount,ref_id
+2026-07-01,SELL,BTC,VDA,0.05,5600000,INR,1,,,,,SELF,OTHER,DEDUCTED,2800,CLS1001
+2026-07-02,SELL,BTC,VDA,0.02,5600000,INR,1,,,,,SELF,OTHER,UNKNOWN,,CLS1002
+2026-07-03,WITHDRAWAL,BTC,VDA,0.03,,,,,,,,SELF,SELF,NOT_APPLICABLE,0,CLS1003
+2026-07-04,TRANSFER,ETH,VDA,0.5,,,,,,,,SELF,OTHER,UNKNOWN,,CLS1004
+2026-07-05,WITHDRAWAL,ETH,VDA,0.25,,,,,,,,,,NOT_APPLICABLE,0,CLS1005
+2026-07-06,SELL,BTC,VDA,0.01,,,,ETH,VDA,0.181818,310000,SELF,OTHER,DEDUCTED,563.64,CLS1006
