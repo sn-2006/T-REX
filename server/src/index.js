@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import binanceRoutes from "./routes/binance.js";
 
 import authRoutes from "./routes/auth.js";
 import caseRoutes from "./routes/cases.js";
@@ -27,7 +28,7 @@ app.use(cors({
     return callback(new Error("CORS origin not allowed."));
   },
 }));
-app.use(express.json({ limit: "5mb" })); // reports can carry a few hundred transaction rows
+app.use(express.json({ limit: "50mb" })); // reports can carry a few hundred transaction rows
 
 const API_PREFIX = process.env.VERCEL ? "" : "/api";
 
@@ -39,10 +40,20 @@ app.use(`${API_PREFIX}/verify`, verifyRoutes);
 app.use(`${API_PREFIX}/ai`, aiRoutes);
 app.use(`${API_PREFIX}/verification`, verificationRoutes);
 app.use(`${API_PREFIX}/compliance`, complianceRoutes);
+app.use(`${API_PREFIX}/binance`, binanceRoutes);
 
 app.use((err, req, res, next) => {
-  console.error(err);
-  res.status(500).json({ error: "Unexpected server error." });
+  console.error("SERVER ERROR:", err);
+
+  if (err.type === "entity.too.large") {
+    return res.status(413).json({
+      error: "Request payload is too large.",
+    });
+  }
+
+  res.status(500).json({
+    error: err.message || "Unexpected server error.",
+  });
 });
 
 export default app;

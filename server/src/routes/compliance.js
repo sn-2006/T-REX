@@ -7,7 +7,11 @@ const router = Router();
 router.post("/analyze", requireAuth, (req, res) => {
   const rows = Array.isArray(req.body?.rows) ? req.body.rows : null;
   if (!rows) return res.status(400).json({ error: "rows must be an array." });
-  if (rows.length > 5000) return res.status(413).json({ error: "Too many transaction rows." });
+  if (rows.length > 50000) {
+  return res.status(413).json({
+    error: "Too many transaction rows. Maximum supported is 50,000.",
+  });
+}
 
   try {
     const result = analyzeRows(rows);
