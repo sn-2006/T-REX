@@ -26,12 +26,15 @@ const BOTTOM_Y = 230;
 const TERMINAL_X = WIDTH - 70;
 const TERMINAL_COLUMN_Y = [55, 150, 245];
 
-export default function TransactionFlowGraph({ allRows, reconciliation, discrepancies }) {
+export default function TransactionFlowGraph({ allRows, reconciliation, discrepancies, walletAnalyses = {} }) {
   const [hoverIdx, setHoverIdx] = useState(null);
 
   const { nodes, edges } = useMemo(
-    () => buildGraph(allRows, reconciliation, discrepancies),
-    [allRows, reconciliation, discrepancies]
+    () => {
+      if (allRows.length === 0) return buildWalletGraph(walletAnalyses);
+      return buildGraph(allRows, reconciliation, discrepancies);
+    },
+    [allRows, reconciliation, discrepancies, walletAnalyses]
   );
 
   if (nodes.length === 0) {
@@ -105,6 +108,39 @@ export default function TransactionFlowGraph({ allRows, reconciliation, discrepa
       </div>
     </div>
   );
+}
+
+function buildWalletGraph(walletAnalyses) {
+  const analyses = Object.values(walletAnalyses).filter(Boolean);
+  const nodes = [];
+  const edges = [];
+  analyses.forEach((analysis, walletIndex) => {
+    const wallet = analysis.wallet;
+    const rootName = `${String(wallet).slice(0, 6)}…${String(wallet).slice(-4)}`;
+    nodes.push({ name: rootName, x: 110, y: 60 + Math.min(walletIndex, 2) * 100, virtual: false });
+    const root = { name: rootName, x: 110, y: 60 + Math.min(walletIndex, 2) * 100 };
+    (analysis.provenance?.edges || []).slice(0, 20).forEach((edge, i) => {
+      const incoming = edge.direction === "IN";
+      const counterparty = incoming ? edge.from : edge.to;
+      const label = `${edge.amount} ${edge.asset}`;
+      edges.push({
+        x1: incoming ? 430 : root.x + 15,
+        y1: root.y + (i % 5) * 18,
+        x2: incoming ? root.x - 15 : 430,
+        y2: root.y + (i % 5) * 18,
+        label,
+        kind: "ok",
+        dashed: true,
+      });
+      if (i < 5) nodes.push({
+        name: `${String(counterparty).slice(0, 6)}…${String(counterparty).slice(-4)}`,
+        x: incoming ? 430 : 430,
+        y: root.y + (i % 5) * 18,
+        virtual: false,
+      });
+    });
+  });
+  return { nodes, edges };
 }
 
 function buildGraph(allRows, reconciliation, discrepancies = []) {

@@ -71,16 +71,25 @@ async function ensureConfiguredNetwork() {
  * gasPrice.
  */
 async function getSafeGasSettings(provider, contract, reportHash) {
-  const feeData = await provider.getFeeData();
-
   // Estimate the actual gas required by the contract call.
   const gasLimit = await contract.anchorReport.estimateGas("0x" + reportHash);
+
+  // Some Polygon RPC endpoints do not implement eth_maxPriorityFeePerGas,
+  // which ethers may call from getFeeData(). Fall back to the standard
+  // eth_gasPrice RPC method instead of letting fee discovery abort the
+  // transaction before MetaMask can submit it.
+  let feeData = null;
+  try {
+    feeData = await provider.getFeeData();
+  } catch (error) {
+    console.warn("RPC fee-data method unavailable; falling back to eth_gasPrice.", error?.message || error);
+  }
 
   // Add a 20% safety margin to the estimated gas limit.
   const safeGasLimit = (gasLimit * 120n) / 100n;
 
   // Prefer EIP-1559 fee parameters when supported.
-  if (feeData.maxFeePerGas && feeData.maxPriorityFeePerGas) {
+  if (feeData?.maxFeePerGas && feeData?.maxPriorityFeePerGas) {
     const bumpedPriority = (feeData.maxPriorityFeePerGas * 120n) / 100n;
     const safePriorityFeePerGas =
       bumpedPriority > MIN_PRIORITY_FEE ? bumpedPriority : MIN_PRIORITY_FEE;
@@ -99,14 +108,26 @@ async function getSafeGasSettings(provider, contract, reportHash) {
     };
   }
 
-  // Fallback for legacy networks.
-  if (feeData.gasPrice) {
+  // Fallback for legacy networks and RPCs without eth_maxPriorityFeePerGas.
+  // eth_gasPrice is broadly supported and is valid as a legacy fee field on
+  // Polygon Amoy, while still giving us a fresh network price per attempt.
+  if (feeData?.gasPrice) {
     const bumpedGasPrice = (feeData.gasPrice * 120n) / 100n;
     const safeGasPrice = bumpedGasPrice > MIN_PRIORITY_FEE ? bumpedGasPrice : MIN_PRIORITY_FEE;
     return { gasLimit: safeGasLimit, gasPrice: safeGasPrice };
   }
 
-  throw new Error("The network did not provide usable gas fee information.");
+  try {
+    const gasPriceHex = await provider.send("eth_gasPrice", []);
+    const gasPrice = BigInt(gasPriceHex);
+    const bumpedGasPrice = (gasPrice * 120n) / 100n;
+    const safeGasPrice = bumpedGasPrice > MIN_PRIORITY_FEE ? bumpedGasPrice : MIN_PRIORITY_FEE;
+    return { gasLimit: safeGasLimit, gasPrice: safeGasPrice };
+  } catch (error) {
+    throw new Error(
+      `The network did not provide usable gas fee information: ${error?.message || error}`
+    );
+  }
 }
 
 // Writes the hash on-chain. Requires MetaMask (or another injected wallet)

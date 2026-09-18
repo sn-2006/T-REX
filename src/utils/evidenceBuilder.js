@@ -13,11 +13,14 @@ import { computeAllTdsRows } from "./tdsDiscrepancy.js";
 // ---------------------------------------------------------------------------
 
 // ---- 1. Top-level "AI Compliance Insights" panel stats ---------------------
-export function buildComplianceInsights({ allRows, reconciliation, discrepancies }) {
+export function buildComplianceInsights({ allRows, reconciliation, discrepancies, walletAnalyses = {} }) {
   const { transferChecks, warnings, unmatchedDeposits } = reconciliation;
 
-  const totalTransactions = allRows.length;
-  const matchedTransactions = transferChecks.length * 2; // withdrawal + deposit leg, both resolved
+  const walletList = Object.values(walletAnalyses).filter(Boolean);
+  const walletTransferCount = walletList.reduce((sum, a) => sum + (Number(a.transferCount) || 0), 0);
+  const walletOnly = allRows.length === 0 && walletTransferCount > 0;
+  const totalTransactions = walletOnly ? walletTransferCount : allRows.length;
+  const matchedTransactions = walletOnly ? 0 : transferChecks.length * 2; // withdrawal + deposit leg, both resolved
   const probableTransfers = transferChecks.filter((t) => t.confidence >= 60 && t.confidence < 90).length;
   const unmatchedTransactions =
     warnings.filter((w) => w.type === "ORPHANED_WITHDRAWAL").length + unmatchedDeposits.length;
@@ -46,17 +49,28 @@ export function buildComplianceInsights({ allRows, reconciliation, discrepancies
     totalExpectedTds > 0 ? Math.max(0, Math.min(100, (totalReportedTds / totalExpectedTds) * 100)) : 100;
   const components = [avgTransferConfidence, tdsCoveragePct].filter((v) => v !== null);
   const overallConfidence =
-    components.length > 0 ? Math.round(components.reduce((a, b) => a + b, 0) / components.length) : 100;
+    components.length > 0 ? Math.round(components.reduce((a, b) => a + b, 0) / components.length) : (walletOnly ? walletConfidence(walletList) : 100);
 
   return {
     totalTransactions,
     matchedTransactions,
+    walletOnly,
     probableTransfers,
     unmatchedTransactions,
     tdsDiscrepancyCount,
     highRiskCount,
     overallConfidence,
   };
+}
+
+function walletConfidence(walletList) {
+  const scores = walletList.flatMap((a) =>
+    (a.provenance?.nodes || [])
+      .map((n) => Number(n.riskScore))
+      .filter((n) => Number.isFinite(n))
+  );
+  if (!scores.length) return 100;
+  return Math.round(scores.reduce((sum, score) => sum + Math.max(0, 100 - score), 0) / scores.length);
 }
 
 // ---- 2. Per-discrepancy evidence packet ------------------------------------
