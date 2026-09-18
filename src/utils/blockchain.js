@@ -56,31 +56,21 @@ export async function anchorReportOnChain(reportHashHex) {
     throw new Error("No wallet found — install MetaMask to anchor a report on-chain.");
   }
 
-  // Trigger the connection popup directly via window.ethereum (not ethers) —
-  // this is what reliably opens it for a site not yet connected.
-  await window.ethereum.request({ method: "eth_requestAccounts" });
+  const provider = new BrowserProvider(window.ethereum);
+  // Request account access FIRST. This is the call that reliably opens/
+  // focuses the MetaMask popup for a site it hasn't connected to yet —
+  // calling wallet_switchEthereumChain before the site is connected can
+  // fail silently (no visible popup) on some MetaMask versions/lock
+  // states, which is why this used to be ordered the other way around.
+  await provider.send("eth_requestAccounts", []);
 
-  // Switch network BEFORE creating the ethers provider, so it detects the
-  // correct chain from the start instead of caching stale fee/network data.
   await ensureConfiguredNetwork();
 
-  const provider = new BrowserProvider(window.ethereum);
   const signer = await provider.getSigner();
   const contract = new Contract(CONTRACT_ADDRESS, ABI, signer);
 
   const bytes32Hash = "0x" + reportHashHex;
-  const feeData = await provider.getFeeData();
-  const MIN_TIP = 30_000_000_000n; // 30 gwei — safely above Amoy's ~25 gwei tip floor
-  const maxPriorityFeePerGas =
-    feeData.maxPriorityFeePerGas && feeData.maxPriorityFeePerGas > MIN_TIP
-      ? feeData.maxPriorityFeePerGas
-      : MIN_TIP;
-  const maxFeePerGas = maxPriorityFeePerGas * 2n; // headroom above base fee + tip  
-
-  const tx = await contract.anchorReport(bytes32Hash, {
-    maxPriorityFeePerGas,
-    maxFeePerGas,
-  });
+  const tx = await contract.anchorReport(bytes32Hash);
   const receipt = await tx.wait();
 
   return {

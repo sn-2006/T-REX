@@ -6,9 +6,14 @@
 export function mockWalletTransfers(address) {
   if (!address || address.trim().length < 4) return [];
 
+  // Each wallet gets its own node name (suffixed by the last 4 chars of its
+  // address) instead of a shared generic "Wallet" — otherwise adding a
+  // second wallet would silently collapse both into the same flow-graph node.
+  const label = `Wallet ${address.slice(-4)}`;
+
   return [
     {
-      exchange: "Wallet",
+      exchange: label,
       date: "2026-06-08",
       type: "DEPOSIT",
       asset: "ETH",
@@ -18,7 +23,7 @@ export function mockWalletTransfers(address) {
       refId: `WALLET-${address.slice(-6)}-1`,
     },
     {
-      exchange: "Wallet",
+      exchange: label,
       date: "2026-06-09",
       type: "WITHDRAWAL",
       asset: "ETH",

@@ -1,19 +1,45 @@
-# Environment variables
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Environment variables and secrets
 .env
 .env.*
 !.env.example
-
-# Dependencies
-node_modules/
+!.env.*.example
 
 # Build output
 dist/
+**/dist/
 build/
-.next/
+**/build/
 
-# Hardhat
+# Hardhat generated files
 blockchain/artifacts/
 blockchain/cache/
+blockchain/coverage/
 
 # Logs
 *.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Editor files
+.vscode/
+.idea/
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+
+# Test coverage
+coverage/
+
+# Local uploads or generated files
+uploads/
+output/

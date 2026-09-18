@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { answerReportQuestion } from "../services/complianceAssistant";
+import LoadingScreen from "./LoadingTemp";
 
 const SUGGESTED_QUESTIONS = [
   "Show me the largest discrepancies.",
@@ -60,10 +61,13 @@ export default function AIInsightsPanel({ insights, reportContext }) {
           <div className="ai-chat-log">
             {messages.map((m, i) => (
               <div key={i} className={`ai-chat-msg ai-chat-${m.role}`}>
-                {m.role === "assistant" && <span className="ai-chat-tag">ChainTDS AI</span>}
-                <div>{m.text}</div>
+                {m.role === "assistant" && (
+                  <span className="ai-chat-tag">ChainTDS AI</span>
+                )}
+              <div>{m.text}</div>
               </div>
             ))}
+          {asking && <LoadingScreen />}
           </div>
         )}
 
