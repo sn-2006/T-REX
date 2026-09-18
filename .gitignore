@@ -1,0 +1,19 @@
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+.next/
+
+# Hardhat
+blockchain/artifacts/
+blockchain/cache/
+
+# Logs
+*.log
