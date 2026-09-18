@@ -2,12 +2,17 @@ import { useState, useEffect } from "react";
 import QRCode from "qrcode";
 import { parseExchangeCSV } from "./utils/parseExchange";
 import { reconcile } from "./utils/reconcile";
+import { computeTdsDiscrepancies } from "./utils/tdsDiscrepancy";
+import { buildComplianceInsights, buildDiscrepancyEvidence, buildTransactionEvidence } from "./utils/evidenceBuilder";
 import { generateNarrativeReport } from "./utils/aiReport";
 import { sha256Hex, mockAnchorOnChain } from "./utils/hash";
 import { anchorReportOnChain, isChainConfigured } from "./utils/blockchain";
 import { buildReportPdf } from "./utils/exportPdf";
 import { mockWalletTransfers } from "./utils/walletMock";
 import VerifyPage from "./VerifyPage";
+import AIInsightsPanel from "./components/AIInsightsPanel";
+import DiscrepancyCard from "./components/DiscrepancyCard";
+import TransactionInvestigator from "./components/TransactionInvestigator";
 import "./App.css";
 
 const STEPS = ["upload", "results", "report"];
@@ -44,6 +49,13 @@ function MainApp() {
   const [reportHash, setReportHash] = useState("");
   const [anchor, setAnchor] = useState(null);
   const [qrDataUrl, setQrDataUrl] = useState("");
+
+  // ---- AI Compliance Explainability layer state ----------------------
+  // allTransactionRows is kept so evidence packets can be rebuilt on demand
+  // (e.g. per-discrepancy, per-flag) without re-running reconciliation.
+  const [allTransactionRows, setAllTransactionRows] = useState([]);
+  const [discrepancies, setDiscrepancies] = useState([]);
+  const [insights, setInsights] = useState(null);
 
   function updateExchange(id, patch) {
     setExchanges((list) => list.map((ex) => (ex.id === id ? { ...ex, ...patch } : ex)));
@@ -82,6 +94,15 @@ function MainApp() {
       const result = reconcile(allRows);
       setReconciliation(result);
       setNarrative(generateNarrativeReport(result));
+
+      // ---- AI explainability layer: purely deterministic computation
+      // here (rule engine) — the AI itself is only invoked later, on
+      // demand, when the user clicks an explain/investigate button.
+      const discrepancyList = computeTdsDiscrepancies(allRows);
+      setDiscrepancies(discrepancyList);
+      setAllTransactionRows(allRows);
+      setInsights(buildComplianceInsights({ allRows, reconciliation: result, discrepancies: discrepancyList }));
+
       setStep("results");
     } catch (e) {
       console.error(e);
@@ -213,6 +234,13 @@ function MainApp() {
           <section className="card">
             <h1>Reconciliation results</h1>
 
+            {insights && (
+              <AIInsightsPanel
+                insights={insights}
+                reportContext={{ insights, discrepancies, reconciliation }}
+              />
+            )}
+
             <h3>Trade summary</h3>
             <table className="data-table">
               <thead>
@@ -235,7 +263,7 @@ function MainApp() {
             <h3>Cross-platform transfer check</h3>
             <table className="data-table">
               <thead>
-                <tr><th>Asset</th><th>Amount</th><th>From</th><th>To</th><th>Status</th></tr>
+                <tr><th>Asset</th><th>Amount</th><th>From</th><th>To</th><th>Status</th><th>Confidence</th></tr>
               </thead>
               <tbody>
                 {reconciliation.transferChecks.map((t, i) => (
@@ -245,27 +273,63 @@ function MainApp() {
                     <td>{t.from}</td>
                     <td>{t.to}</td>
                     <td>{t.status === "TDS_GAP" ? "TDS gap" : "OK"}</td>
+                    <td>{t.confidence}%</td>
                   </tr>
                 ))}
                 {reconciliation.transferChecks.length === 0 && (
-                  <tr><td colSpan={5} className="muted">No cross-platform transfers detected.</td></tr>
+                  <tr><td colSpan={6} className="muted">No cross-platform transfers detected.</td></tr>
                 )}
               </tbody>
             </table>
 
             <h3>Warnings</h3>
-            {reconciliation.warnings.length === 0 ? (
+            {reconciliation.warnings.length === 0 && reconciliation.unmatchedDeposits.length === 0 ? (
               <p className="muted">No warnings — everything reconciled cleanly.</p>
             ) : (
               <ul className="warning-list">
                 {reconciliation.warnings.map((w, i) => (
                   <li key={i}>{w.message}</li>
                 ))}
+                {reconciliation.unmatchedDeposits.map((w, i) => (
+                  <li key={`ud-${i}`}>{w.message}</li>
+                ))}
               </ul>
+            )}
+
+            {(reconciliation.warnings.length > 0 || reconciliation.unmatchedDeposits.length > 0) && (
+              <>
+                <h3>Investigate flagged transactions</h3>
+                <ul className="investigator-list">
+                  {[...reconciliation.warnings, ...reconciliation.unmatchedDeposits].map((flag, i) => (
+                    <TransactionInvestigator
+                      key={i}
+                      flag={flag}
+                      evidence={buildTransactionEvidence(flag, { reconciliation, allRows: allTransactionRows })}
+                    />
+                  ))}
+                </ul>
+              </>
+            )}
+
+            {discrepancies.length > 0 && (
+              <>
+                <h3>TDS discrepancies</h3>
+                <div className="discrepancy-list">
+                  {discrepancies.map((d, i) => (
+                    <DiscrepancyCard
+                      key={i}
+                      discrepancy={d}
+                      evidence={buildDiscrepancyEvidence(d, { reconciliation, allRows: allTransactionRows })}
+                    />
+                  ))}
+                </div>
+              </>
             )}
 
             <h3>AI-generated summary</h3>
             <pre className="narrative">{narrative}</pre>
+
+            {error && <div className="error">{error}</div>}
 
             <button className="primary-btn" onClick={finalizeReport} disabled={processing}>
               {processing ? "Generating..." : "Generate report + hash"}

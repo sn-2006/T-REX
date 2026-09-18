@@ -1,8 +1,15 @@
-import { daysBetween } from "./parseExchange";
+import { daysBetween } from "./parseExchange.js";
 
 // Runs the core ChainTDS reconciliation logic across all uploaded exchange
 // transactions (and, optionally, on-chain wallet transfers).
-// Returns: { tradeSummary, transferChecks, warnings }
+// Returns: { tradeSummary, transferChecks, warnings, unmatchedDeposits }
+//
+// unmatchedDeposits and the per-transfer `confidence` score are additive —
+// every field that existed before is unchanged, so nothing downstream
+// (PDF export, existing UI tables) needs to change. They exist so the AI
+// explainability layer (utils/evidenceBuilder.js) has real, deterministic
+// numbers to explain rather than having to invent them — the rule engine
+// decides what's a match and how confident it is; the AI only explains it.
 export function reconcile(allRows) {
   const trades = allRows.filter((r) => r.type === "SELL" || r.type === "BUY");
   const withdrawals = allRows.filter((r) => r.type === "WITHDRAWAL");
@@ -33,9 +40,24 @@ export function reconcile(allRows) {
   // 2. Transfer check — match withdrawals on one exchange to deposits on
   // another for the same asset, within a 5-day window. This is the
   // cross-platform check no single exchange can do on its own.
+  //
+  // Each match also gets a deterministic `confidence` score (0-100):
+  // 60 points for how close the two amounts are (exact = full 60, degrades
+  // linearly to 0 at a 2% gap) + 40 points for how close in time they are
+  // (same day = full 40, degrades linearly to 0 at the 5-day window edge).
+  // This is the ONLY place confidence is computed — the AI layer reads it,
+  // never invents its own.
   const transferChecks = [];
   const matchedWithdrawalIds = new Set();
   const matchedDepositIds = new Set();
+
+  function matchConfidence(w, d) {
+    const amountGapPct = w.amount > 0 ? Math.abs(d.amount - w.amount) / w.amount : 0;
+    const amountScore = Math.max(0, 1 - amountGapPct / 0.02) * 60;
+    const gapDays = daysBetween(w.date, d.date);
+    const timeScore = Math.max(0, 1 - gapDays / 5) * 40;
+    return Math.round(amountScore + timeScore);
+  }
 
   for (const w of withdrawals) {
     const candidate = deposits.find(
@@ -61,6 +83,7 @@ export function reconcile(allRows) {
         fromDate: w.date,
         toDate: candidate.date,
         status: gap ? "TDS_GAP" : "OK",
+        confidence: matchConfidence(w, candidate),
       });
     }
   }
@@ -89,5 +112,18 @@ export function reconcile(allRows) {
     }
   }
 
-  return { tradeSummary, transferChecks, warnings };
+  // 4. Unmatched deposits — the mirror image of orphaned withdrawals: money
+  // that arrived with no visible origin in the uploaded data. Tracked
+  // separately (not folded into `warnings`) so the AI investigation layer
+  // can address "unknown source" deposits with their own explanation,
+  // matching the "Unknown Wallet" scenario in the investigation spec.
+  const unmatchedDeposits = deposits
+    .filter((d) => !matchedDepositIds.has(d.refId))
+    .map((d) => ({
+      type: "UNKNOWN_SOURCE",
+      message: `${d.amount} ${d.asset} arrived on ${d.exchange} on ${d.date} with no matching withdrawal found elsewhere in the uploaded data.`,
+      refId: d.refId,
+    }));
+
+  return { tradeSummary, transferChecks, warnings, unmatchedDeposits };
 }
