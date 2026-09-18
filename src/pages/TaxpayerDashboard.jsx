@@ -13,8 +13,7 @@ import { generateNarrativeReport } from "../utils/aiReport";
 import { sha256Hex, mockAnchorOnChain } from "../utils/hash";
 import { anchorReportOnChain, isChainConfigured, verifyReportOnChain } from "../utils/blockchain";
 import { buildReportPdf } from "../utils/exportPdf";
-import { mockWalletTransfers } from "../utils/walletMock";
-import { fetchWalletTransfers, isWalletApiConfigured } from "../adapters/walletAdapter";
+import { fetchWalletAnalysis, SUPPORTED_WALLET_CHAINS } from "../adapters/walletAdapter";
 import { upsertCase, deriveStatus } from "../data/caseStore";
 import { apiFetch } from "../api/client";
 import { fetchVerificationStatus } from "../api/verification";
@@ -60,6 +59,8 @@ export default function TaxpayerDashboard({ session, onLogout }) {
     newExchange("Exchange B"),
   ]);
   const [wallets, setWallets] = useState([newWallet()]);
+  const [walletAnalyses, setWalletAnalyses] = useState({});
+  const [walletAnalyzing, setWalletAnalyzing] = useState({});
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState("");
 
@@ -171,53 +172,87 @@ export default function TaxpayerDashboard({ session, onLogout }) {
     }
   }
 
+  async function analyzeWallet(id) {
+    const wallet = wallets.find((w) => w.id === id);
+    if (!wallet?.address.trim()) return;
+
+    setWalletAnalyzing((state) => ({ ...state, [id]: true }));
+    setError("");
+    try {
+      const analysis = await fetchWalletAnalysis(wallet.address.trim());
+      setWalletAnalyses((state) => ({ ...state, [id]: analysis }));
+    } catch (e) {
+      setError(e.message || "Couldn't analyze the wallet on-chain.");
+    } finally {
+      setWalletAnalyzing((state) => ({ ...state, [id]: false }));
+    }
+  }
+
   async function runReconciliation() {
     setError("");
 
-    const missingName = exchanges.some((ex) => !ex.name.trim());
-    const missingCsv = exchanges.some((ex) => ex.source === "csv" && !ex.file);
-    const missingApiRows = exchanges.some((ex) => ex.source === "api" && !ex.rows);
+    const walletAddresses = wallets.map((w) => w.address.trim()).filter(Boolean);
 
-    if (missingName || missingCsv || missingApiRows) {
-      setError(
-        "Give every exchange a name, and either upload its statement file or fetch its transactions via API, to continue."
-      );
-      return;
-    }
+const missingName = exchanges.some((ex) => !ex.name.trim());
+const missingCsv = exchanges.some((ex) => ex.source === "csv" && !ex.file);
+const missingApiRows = exchanges.some((ex) => ex.source === "api" && !ex.rows);
+
+if (
+  walletAddresses.length === 0 &&
+  (missingName || missingCsv || missingApiRows)
+) {
+  setError(
+    "Give every exchange a name, and either upload its statement file or fetch its transactions via API, to continue."
+  );
+  return;
+}
 
     setProcessing(true);
 
     try {
       const parsedGroups = await Promise.all(
-        exchanges.map(async (ex) =>
-          ex.source === "api" ? ex.rows : parseExchangeCSV(await ex.file.text(), ex.name.trim())
-        )
-      );
+  exchanges
+    .filter((ex) => ex.name.trim() && (ex.source === "api" ? ex.rows : ex.file))
+    .map(async (ex) =>
+      ex.source === "api"
+        ? ex.rows
+        : parseExchangeCSV(await ex.file.text(), ex.name.trim())
+    )
+);
+      
 
-      const walletAddresses = wallets.map((w) => w.address.trim()).filter(Boolean);
-
-      let walletRows = [];
       if (walletAddresses.length) {
-        if (isWalletApiConfigured) {
-          try {
-            walletRows = (
-              await Promise.all(walletAddresses.map((addr) => fetchWalletTransfers(addr)))
-            ).flat();
-          } catch (walletErr) {
-            console.error(walletErr);
-            const err = new Error(
-              walletErr.message ||
-                "Couldn't fetch one of the wallets — check the address and try again."
-            );
-            err.isWalletFetchError = true;
-            throw err;
-          }
-        } else {
-          walletRows = walletAddresses.flatMap((addr) => mockWalletTransfers(addr));
+        try {
+          await Promise.all(
+            wallets
+              .filter((w) => w.address.trim())
+              .map(async (w) => {
+                const existing = walletAnalyses[w.id];
+                if (existing && existing.wallet.toLowerCase() === w.address.trim().toLowerCase()) {
+                  return existing;
+                }
+                const analysis = await fetchWalletAnalysis(w.address.trim());
+                setWalletAnalyses((state) => ({ ...state, [w.id]: analysis }));
+                return analysis;
+              })
+          );
+          // Wallet provenance is kept in walletAnalyses for the on-chain UI.
+          // It is not copied into the compliance ledger because the wallet
+          // tracer currently reports movements/provenance, not taxable sale
+          // consideration. This also prevents large on-chain histories from
+          // entering the TDS reconciliation payload.
+        } catch (walletErr) {
+          console.error(walletErr);
+          const err = new Error(
+            walletErr.message ||
+              "Couldn't fetch one of the wallets — check the address and server configuration."
+          );
+          err.isWalletFetchError = true;
+          throw err;
         }
       }
 
-      const rawRows = [...parsedGroups.flat(), ...walletRows];
+      const rawRows = parsedGroups.flat();
 
       // Send the normalized ledger through the backend compliance engine.
       // The server performs VDA-transfer classification, consideration
@@ -229,11 +264,19 @@ export default function TaxpayerDashboard({ session, onLogout }) {
         body: { rows: rawRows },
       });
       const allRows = complianceResult.rows;
-
       const result = reconcile(allRows);
 
       setReconciliation(result);
-      setNarrative(generateNarrativeReport(result));
+      const walletList = Object.values(walletAnalyses).filter(Boolean);
+      const walletTransferCount = walletList.reduce(
+        (sum, analysis) => sum + (Number(analysis.transferCount) || 0),
+        0
+      );
+      const reportNarrative =
+        allRows.length === 0 && walletTransferCount > 0
+          ? `DECENTRALIZED WALLET ANALYSIS\n\nT-REX analyzed ${walletTransferCount.toLocaleString("en-IN")} observable on-chain transfer(s) across ${walletList.length} wallet(s).\n\nThis wallet analysis is provenance-focused. On-chain movements are not treated as taxable INR trades unless a corresponding taxable disposition is present in exchange/compliance data.\n\nPROVENANCE\nThe displayed flow contains bounded observable transaction edges and address enrichment/risk signals where available. An on-chain path does not by itself prove the ultimate real-world identity or ultimate source of funds.`
+          : generateNarrativeReport(result);
+      setNarrative(reportNarrative);
 
       const discrepancyList = computeTdsDiscrepancies(allRows);
 
@@ -245,6 +288,7 @@ export default function TaxpayerDashboard({ session, onLogout }) {
           allRows,
           reconciliation: result,
           discrepancies: discrepancyList,
+          walletAnalyses,
         })
       );
 
@@ -252,7 +296,7 @@ export default function TaxpayerDashboard({ session, onLogout }) {
     } catch (e) {
       console.error(e);
       setError(
-        e.isWalletFetchError
+        e.isWalletFetchError || e.message
           ? e.message
           : "Couldn't parse one of the files — check the CSV format and try again."
       );
@@ -286,29 +330,39 @@ export default function TaxpayerDashboard({ session, onLogout }) {
       );
 
       // Register this report as a case for the Auditor / Regulator dashboards.
-      // The server identifies the owning taxpayer from the auth token, and
-      // assigns an auditor round-robin itself — no need to pass either here.
-      await upsertCase({
-        id: hash,
-        exchanges: exchanges.map((ex) => ex.name.trim()),
-        wallets: wallets.filter((w) => w.address.trim()).map((w) => w.address.trim()),
-        allRows: allTransactionRows,
-        reconciliation,
-        discrepancies,
-        insights,
-        narrative,
-        reportHash: hash,
-        anchor: anchorResult,
-        status: deriveStatus(insights),
-        reviewNote: "",
-        createdAt: new Date().toISOString(),
-        reviewedAt: null,
-        demo: false,
-      });
+      // The blockchain anchor is already durable at this point, so a database
+      // save failure must not hide the successfully generated hash/tx from the
+      // taxpayer. The report page below remains available and shows the save
+      // warning; the backend case can be retried without resubmitting this
+      // blockchain transaction.
+      let caseSaveError = "";
+      try {
+        await upsertCase({
+          id: hash,
+          exchanges: exchanges.map((ex) => ex.name.trim()),
+          wallets: wallets.filter((w) => w.address.trim()).map((w) => w.address.trim()),
+          allRows: allTransactionRows,
+          reconciliation,
+          discrepancies,
+          insights,
+          narrative,
+          reportHash: hash,
+          anchor: anchorResult,
+          status: deriveStatus(insights),
+          reviewNote: "",
+          createdAt: new Date().toISOString(),
+          reviewedAt: null,
+          demo: false,
+        });
+      } catch (caseErr) {
+        console.error("Report was anchored but could not be saved as a case:", caseErr);
+        caseSaveError = caseErr.message || "The report could not be saved to the T-REX case database.";
+      }
 
       const verifyUrl = `${window.location.origin}${window.location.pathname}#/verify/${hash}`;
       const qr = await QRCode.toDataURL(verifyUrl, { margin: 1, width: 220 });
       setQrDataUrl(qr);
+      setError(caseSaveError);
       setStep("report");
     } catch (e) {
       console.error(e);
@@ -606,6 +660,14 @@ export default function TaxpayerDashboard({ session, onLogout }) {
                           onChange={(e) => updateWallet(w.id, { address: e.target.value })}
                         />
                       </label>
+                      <button
+                        type="button"
+                        className="secondary-btn"
+                        onClick={() => analyzeWallet(w.id)}
+                        disabled={walletAnalyzing[w.id] || !w.address.trim()}
+                      >
+                        {walletAnalyzing[w.id] ? "Analyzing..." : "Analyze on-chain"}
+                      </button>
                       {wallets.length > 1 && (
                         <button className="link-btn danger" onClick={() => removeWallet(w.id)}>
                           Remove
@@ -620,10 +682,79 @@ export default function TaxpayerDashboard({ session, onLogout }) {
                 </button>
 
                 <p className="muted small" style={{ marginTop: 16 }}>
-                  {isWalletApiConfigured
-                    ? "Wallet transfers are fetched live from the chain via Alchemy when you run reconciliation."
-                    : "Wallet transfers are simulated in this prototype — set VITE_WALLET_RPC_URL to fetch real transfers via Alchemy."}
+                  {SUPPORTED_WALLET_CHAINS[0].label} is supported for live on-chain analysis.
+                  T-REX fetches observable transfers from the blockchain and enriches addresses
+                  with MetaSleuth when the backend API key is configured.
                 </p>
+
+                {Object.entries(walletAnalyses).map(([walletId, analysis]) => {
+                  const rootNode = analysis.provenance?.nodes?.find(
+                    (node) => node.address.toLowerCase() === analysis.wallet.toLowerCase()
+                  );
+                  return (
+                    <div className="wallet-analysis-card" key={walletId}>
+                      <div className="wallet-analysis-head">
+                        <div>
+                          <div className="eyebrow">ON-CHAIN PROVENANCE</div>
+                          <h3>{analysis.chain?.name || "Ethereum Mainnet"}</h3>
+                          <code>{analysis.wallet}</code>
+                        </div>
+                        <div className="wallet-risk-badge">
+                          Risk {rootNode?.riskScore ?? "—"}
+                        </div>
+                      </div>
+
+                      <div className="wallet-analysis-stats">
+                        <div><span>Transfers</span><strong>{analysis.transferCount}</strong></div>
+                        <div><span>Counterparties</span><strong>{analysis.provenance?.counterparties?.length || 0}</strong></div>
+                        <div>
+  <span>MetaSleuth</span>
+  <strong>
+    {analysis.enrichment?.status === "live"
+      ? "Live"
+      : analysis.enrichment?.status === "partial"
+        ? "Partial"
+        : analysis.enrichment?.status === "rate_limited"
+          ? "Rate limited"
+          : "Not configured"}
+  </strong>
+</div>
+                      </div>
+
+                      <p className="muted small">{analysis.provenance?.note}</p>
+
+                      <div className="wallet-flow-list">
+                        {(analysis.provenance?.edges || []).slice(0, 12).map((edge) => {
+                          const counterparty = edge.direction === "IN" ? edge.from : edge.to;
+                          const node = analysis.provenance?.nodes?.find(
+                            (n) => n.address.toLowerCase() === counterparty.toLowerCase()
+                          );
+                          return (
+                            <div className="wallet-flow-row" key={`${edge.txHash}-${edge.from}-${edge.to}`}>
+                              <div>
+                                <strong>{edge.direction === "IN" ? "IN" : "OUT"}</strong>
+                                <span>{edge.amount} {edge.asset}</span>
+                              </div>
+                              <div className="wallet-flow-path">
+                                <code>{edge.direction === "IN" ? edge.from : analysis.wallet}</code>
+                                <span>→</span>
+                                <code>{edge.direction === "IN" ? analysis.wallet : edge.to}</code>
+                              </div>
+                              <div className="wallet-flow-label">
+                                <strong>{node?.entity || node?.nameTag || "UNKNOWN"}</strong>
+                                <span>Risk {node?.riskScore ?? "—"}</span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      <div className="wallet-enrichment-note">
+                        {analysis.enrichment?.note}
+                      </div>
+                    </div>
+                  );
+                })}
 
                 {error && <div className="error">{error}</div>}
 
@@ -641,13 +772,14 @@ export default function TaxpayerDashboard({ session, onLogout }) {
                   allRows={allTransactionRows}
                   discrepancies={discrepancies}
                   reconciliation={reconciliation}
+                  walletAnalyses={walletAnalyses}
                   role="taxpayer"
                 />
 
                 {insights && (
                   <AIInsightsPanel
                     insights={insights}
-                    reportContext={{ insights, discrepancies, reconciliation }}
+                    reportContext={{ insights, discrepancies, reconciliation, walletAnalyses }}
                   />
                 )}
 
@@ -656,7 +788,37 @@ export default function TaxpayerDashboard({ session, onLogout }) {
                   allRows={allTransactionRows}
                   reconciliation={reconciliation}
                   discrepancies={discrepancies}
+                  walletAnalyses={walletAnalyses}
                 />
+
+                {allTransactionRows.length === 0 && Object.keys(walletAnalyses).length > 0 && (
+                  <section className="wallet-analysis-results">
+                    <h3>Decentralized wallet analysis</h3>
+                    <p className="muted small">On-chain provenance is reported separately from taxable exchange trades.</p>
+                    <table className="data-table">
+                      <thead>
+                        <tr><th>Wallet</th><th>Chain</th><th>Transfers</th><th>Counterparties</th><th>MetaSleuth</th><th>Risk</th></tr>
+                      </thead>
+                      <tbody>
+                        {Object.entries(walletAnalyses).map(([walletId, analysis]) => {
+                          const rootNode = analysis.provenance?.nodes?.find(
+                            (node) => node.address.toLowerCase() === analysis.wallet.toLowerCase()
+                          );
+                          return (
+                            <tr key={walletId}>
+                              <td><code>{analysis.wallet}</code></td>
+                              <td>{analysis.chain?.name || "Ethereum Mainnet"}</td>
+                              <td>{Number(analysis.transferCount || 0).toLocaleString("en-IN")}</td>
+                              <td>{analysis.provenance?.counterparties?.length || 0}</td>
+                              <td>{analysis.enrichment?.status === "live" ? "Live" : analysis.enrichment?.status === "partial" ? "Partial" : analysis.enrichment?.status === "rate_limited" ? "Rate limited" : "Not configured"}</td>
+                              <td>{rootNode?.riskScore ?? "—"}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </section>
+                )}
 
                 <h3>Trade summary</h3>
                 <table className="data-table">
@@ -793,6 +955,8 @@ export default function TaxpayerDashboard({ session, onLogout }) {
                   {anchor.network}. Scan the QR — it opens a real verification page in this
                   app rather than a placeholder link.
                 </p>
+
+                {error && <div className="error" style={{ marginBottom: 16 }}>{error}</div>}
 
                 <div className="report-grid">
                   <div>

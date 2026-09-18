@@ -21,13 +21,13 @@ function groupBy(rows, key) {
   return Object.entries(map).map(([label, value]) => ({ label, value }));
 }
 
-export default function PowerBIAnalytics({ allRows = [], discrepancies = [], reconciliation = null, cases = [], role = "taxpayer" }) {
+export default function PowerBIAnalytics({ allRows = [], discrepancies = [], reconciliation = null, walletAnalyses = {}, cases = [], role = "taxpayer" }) {
   const [selected, setSelected] = useState(null);
 
   const data = useMemo(() => {
-    if (role === "taxpayer") return buildTaxpayerData(allRows, discrepancies, reconciliation);
+    if (role === "taxpayer") return buildTaxpayerData(allRows, discrepancies, reconciliation, walletAnalyses);
     return buildCaseData(cases);
-  }, [allRows, discrepancies, reconciliation, cases, role]);
+  }, [allRows, discrepancies, reconciliation, walletAnalyses, cases, role]);
 
   const selectedDiscrepancy = selected ? discrepancies[selected] : null;
 
@@ -167,8 +167,11 @@ function LineChart({ data }) {
   return <div className="pbi-line-wrap"><svg viewBox="0 0 100 100" preserveAspectRatio="none" className="pbi-line-svg"><polyline points={points} fill="none" stroke="#7C9774" strokeWidth="2.5" vectorEffect="non-scaling-stroke" /></svg><div className="pbi-line-labels">{data.map((d) => <span key={d.label}>{d.label}</span>)}</div></div>;
 }
 
-function buildTaxpayerData(allRows, discrepancies, reconciliation) {
+function buildTaxpayerData(allRows, discrepancies, reconciliation, walletAnalyses = {}) {
   const tds = computeAllTdsRows(allRows);
+  const walletList = Object.values(walletAnalyses).filter(Boolean);
+  const walletTransferCount = walletList.reduce((sum, a) => sum + (Number(a.transferCount) || 0), 0);
+  const walletOnly = allRows.length === 0 && walletTransferCount > 0;
   const exchanges = Array.from(new Set(allRows.map((r) => r.exchange).filter(Boolean)));
   const exchangeTds = exchanges.map((exchange) => { const rows = tds.filter((r) => r.exchange === exchange); return { label: exchange, expected: rows.reduce((s, r) => s + r.expectedTds, 0), reported: rows.reduce((s, r) => s + r.reportedTds, 0) }; });
   const exchangeTransactions = exchanges.map((exchange) => ({ label: exchange, value: allRows.filter((r) => r.exchange === exchange).length }));
@@ -180,14 +183,44 @@ function buildTaxpayerData(allRows, discrepancies, reconciliation) {
   const totalReported = tds.reduce((s, r) => s + r.reportedTds, 0);
   return {
     kpis: [
-      { label: "Transactions", value: allRows.length },
-      { label: "Trading volume", value: money(allRows.reduce((s, r) => s + (Number(r.inrValue) || 0), 0)) },
+      { label: "Transactions", value: walletOnly ? walletTransferCount : allRows.length, sub: walletOnly ? "On-chain transfers" : undefined },
+      { label: "Trading volume", value: money(allRows.reduce((s, r) => s + (Number(r.inrValue) || 0), 0)), sub: walletOnly ? "No INR trade data" : undefined },
       { label: "TDS expected", value: money(totalExpected) },
       { label: "TDS deducted", value: money(totalReported) },
       { label: "TDS gap", value: money(Math.max(0, totalExpected - totalReported)) },
       { label: "Discrepancies", value: discrepancies.length },
-    ], exchangeTds, exchangeTransactions, coverage, risk, discrepancyTypes, trend: dates,
+    ],
+    exchangeTds,
+    exchangeTransactions: walletOnly
+      ? walletList.map((a) => ({ label: `${a.chain?.name || "Ethereum"} wallet`, value: Number(a.transferCount) || 0 }))
+      : exchangeTransactions,
+    coverage,
+    risk: walletOnly ? buildWalletRiskData(walletList) : risk,
+    discrepancyTypes,
+    trend: dates,
   };
+}
+
+function buildWalletRiskData(walletList) {
+  const buckets = {
+    low: 0,
+    medium: 0,
+    high: 0,
+    unknown: 0,
+  };
+  walletList.forEach((analysis) => {
+    const nodes = analysis.provenance?.nodes || [];
+    nodes.forEach((node) => {
+      const score = Number(node.riskScore);
+      if (!Number.isFinite(score)) buckets.unknown += 1;
+      else if (score >= 70) buckets.high += 1;
+      else if (score >= 30) buckets.medium += 1;
+      else buckets.low += 1;
+    });
+  });
+  return Object.entries(buckets)
+    .filter(([, value]) => value > 0)
+    .map(([label, value]) => ({ label: `${label[0].toUpperCase()}${label.slice(1)} risk`, value }));
 }
 
 function buildCaseData(cases) {

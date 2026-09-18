@@ -45,7 +45,7 @@ export default function AIInsightsPanel({ insights, reportContext }) {
       </div>
 
       <div className="ai-confidence-line">
-        Overall compliance confidence: <strong>{insights.overallConfidence}%</strong>
+        {insights.walletOnly ? "On-chain provenance confidence" : "Overall compliance confidence"}: <strong>{insights.overallConfidence}%</strong>
       </div>
 
       <div className="ai-chat">

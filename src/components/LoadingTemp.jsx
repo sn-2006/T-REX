@@ -3,10 +3,10 @@ function LoadingScreen() {
     <div className="loading-container">
       <div className="spinner"></div>
 
-      <h3>T-REX AI is thinking...</h3>
+      <h3>Processing your T-REX report...</h3>
 
       <p>
-        Analyzing the report and generating your explanation...
+        Running reconciliation and preparing the report...
       </p>
     </div>
   );

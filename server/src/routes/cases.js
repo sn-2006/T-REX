@@ -18,7 +18,7 @@ function rowToCase(row, transactions) {
     wallets: row.wallets,
     allRows: transactions.map((t) => ({
       exchange: t.exchange,
-      date: t.tx_date.toISOString().slice(0, 10),
+      date: t.tx_date instanceof Date ? t.tx_date.toISOString().slice(0, 10) : String(t.tx_date).slice(0, 10),
       type: t.type,
       asset: t.asset,
       amount: Number(t.amount),
