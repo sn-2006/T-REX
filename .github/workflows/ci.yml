@@ -1,0 +1,41 @@
+name: ChainTDS CI
+
+on:
+  push:
+    branches:
+      - main
+      - feature/project-code
+      - ai-explainability
+      - role-based-access
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    name: Build ChainTDS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Install blockchain dependencies
+        working-directory: blockchain
+        run: npm ci
+
+      - name: Compile smart contracts
+        working-directory: blockchain
+        run: npx hardhat compile
