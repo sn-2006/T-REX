@@ -9,9 +9,17 @@ Cross-platform crypto TDS reconciliation, prototype build.
   a personal wallet as a stopover between two exchanges, since that's the one
   hop exchange statements alone can't see. Direct exchange-to-exchange
   transfers don't need it.
-- Reconciles: per-asset trade summary, cross-platform transfer matching, and
-  TDS-gap detection (the core differentiator — catching TDS status when an
-  asset moves between platforms, which no single exchange can see on its own)
+- Reconciles: per-asset trade summary, cross-platform transfer matching (with
+  a deterministic 0-100% match confidence score), and TDS-gap detection (the
+  core differentiator — catching TDS status when an asset moves between
+  platforms, which no single exchange can see on its own)
+- Detects TDS discrepancies: expected TDS (1% of SELL value under Section
+  194S) vs. reported TDS, flagged by risk tier
+- **AI Compliance Explainability & Investigation Assistant** — explains *why*
+  the rule engine flagged something, never decides compliance itself. Click
+  "Why is this a discrepancy?" on a TDS discrepancy, "Investigate with AI" on
+  a flagged transaction, or ask the report free-form questions in the chat
+  box. See "AI explainability layer" below.
 - Generates a plain-language AI summary (template-based placeholder for now —
   swap `src/utils/aiReport.js` for a real local Ollama call later; the input/
   output shape won't need to change)
@@ -34,6 +42,44 @@ Then open the printed local URL. Click "Use sample data" on both upload boxes
 for the fastest demo path — the sample CSVs are crafted so BTC and ETH show
 up as flagged cross-platform TDS gaps, and a USDT withdrawal shows up as an
 orphaned transfer with no matching deposit.
+
+## AI explainability layer
+
+**The rule engine decides compliance. AI explains compliance. Blockchain
+certifies the final report.** The AI never calculates tax/TDS, never decides
+whether something is a match, and never invents a confidence score — every
+number it's shown was already computed by `utils/reconcile.js` and
+`utils/tdsDiscrepancy.js` before the AI ever sees it. `utils/evidenceBuilder.js`
+is the only bridge between the two — it's worth reading if you want to see
+exactly what the AI is (and isn't) allowed to know.
+
+```
+CSV / Wallet Data → Normalization → Reconciliation Engine
+  → Deterministic Tax/TDS Rules → Structured Evidence
+  → AI (explain / investigate only) → Human Review
+  → Final Report → SHA-256 Hash → Blockchain Certification
+```
+
+**Works with zero setup.** With no LLM configured, every explain/investigate/
+ask action falls back to a deterministic template built directly from the
+same evidence — so the whole flow is demoable offline, same philosophy as the
+mocked blockchain anchor.
+
+**To use a real model**, copy `.env.example` to `.env` and either:
+- Run a local model (no API key needed): `ollama pull llama3.1 && ollama serve`,
+  leave `VITE_LLM_BASE_URL=http://localhost:11434` as-is
+- Point at a hosted OpenAI-compatible Llama endpoint (Groq, Together, etc.):
+  set `VITE_LLM_API_MODE=openai`, `VITE_LLM_BASE_URL` to that provider's base
+  URL, and `VITE_LLM_API_KEY`
+
+Where to look:
+- `src/utils/tdsDiscrepancy.js` — expected vs. reported TDS per SELL, risk-tiered
+- `src/utils/evidenceBuilder.js` — builds every evidence packet the AI is shown
+- `src/services/llmClient.js` — the actual model call (Ollama or OpenAI-compatible)
+- `src/services/complianceAssistant.js` — prompts, fallback templates, the
+  strict system prompt that keeps the AI in an explain-only role
+- `src/components/AIInsightsPanel.jsx`, `DiscrepancyCard.jsx`,
+  `TransactionInvestigator.jsx` — the UI
 
 ## Trying it on a real chain
 
@@ -119,6 +165,7 @@ verification (free, read-only).
 | PDF export | Real |
 | QR code generation | Real, links to a working in-app verification page |
 | AI narrative report | Template placeholder (swap in Ollama call) |
+| AI compliance explainability/investigation | Real orchestration + prompts; falls back to deterministic templates unless an LLM (Ollama or hosted) is configured |
 | Wallet data | Simulated (address field triggers mock on-chain rows; swap in Alchemy) |
 | Solidity contract | Real, compiled, ready to deploy locally or to Amoy |
 | On-chain anchoring + verification | Auto-switches from simulated to real once you deploy and set `.env` |
@@ -126,4 +173,7 @@ verification (free, read-only).
 ## Sample data
 `public/sample-exchange-a.csv` and `public/sample-exchange-b.csv` — edit these
 or upload your own real exchange exports in the same column format:
-`date,type,asset,amount,inr_value,tds_status,ref_id`
+`date,type,asset,amount,inr_value,tds_status,ref_id` (an optional `tds_amount`
+column is also supported — if present, the TDS discrepancy engine uses that
+real reported amount instead of assuming `tds_status=DEDUCTED` means the full
+1% was collected).

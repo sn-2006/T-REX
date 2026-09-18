@@ -2,6 +2,9 @@ import Papa from "papaparse";
 
 // Parses a single exchange CSV export into a normalized array of transaction rows.
 // Expected columns: date, type, asset, amount, inr_value, tds_status, ref_id
+// Optional column: tds_amount (actual INR TDS deducted, if the exchange
+// reports it) — used by utils/tdsDiscrepancy.js to compare against the
+// expected 1% figure instead of just trusting the tds_status flag.
 export function parseExchangeCSV(fileText, exchangeName) {
   const result = Papa.parse(fileText.trim(), {
     header: true,
@@ -21,6 +24,7 @@ export function parseExchangeCSV(fileText, exchangeName) {
     amount: Number(row.amount) || 0,
     inrValue: Number(row.inr_value) || 0,
     tdsStatus: (row.tds_status || "UNKNOWN").toUpperCase(),
+    tdsAmount: row.tds_amount !== undefined && row.tds_amount !== "" ? Number(row.tds_amount) : null,
     refId: row.ref_id || `${exchangeName}-${idx}`,
   }));
 }
