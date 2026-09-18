@@ -3,6 +3,7 @@ import { computeTdsDiscrepancies } from "../utils/tdsDiscrepancy.js";
 import { buildComplianceInsights } from "../utils/evidenceBuilder.js";
 import { generateNarrativeReport } from "../utils/aiReport.js";
 import { mockAnchorOnChain } from "../utils/hash.js";
+import { withDeterminedConsideration } from "../utils/consideration.js";
 
 // ---------------------------------------------------------------------------
 // Seed data for the Auditor and Regulator dashboards.
@@ -14,7 +15,18 @@ import { mockAnchorOnChain } from "../utils/hash.js";
 // ---------------------------------------------------------------------------
 
 function row(exchange, date, type, asset, amount, inrValue, tdsStatus, refId, tdsAmount = null) {
-  return { exchange, date, type, asset, amount, inrValue, tdsStatus, tdsAmount, refId };
+  return withDeterminedConsideration({
+    exchange,
+    date,
+    type,
+    asset,
+    assetType: "VDA",
+    amount,
+    inrValue,
+    tdsStatus,
+    tdsAmount,
+    refId,
+  });
 }
 
 const RAW_CASES = [

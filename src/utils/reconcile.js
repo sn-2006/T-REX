@@ -32,7 +32,7 @@ export function reconcile(allRows) {
     const s = summaryMap[key];
     s.tradeCount += 1;
     s.totalTraded += t.amount;
-    s.totalInr += t.inrValue;
+    s.totalInr += (t.consideration?.inrValue ?? t.inrValue);
     if (t.tdsStatus === "DEDUCTED") s.tdsDeductedCount += 1;
   }
   const tradeSummary = Object.values(summaryMap);
@@ -111,6 +111,18 @@ export function reconcile(allRows) {
       });
     }
   }
+  for (const t of trades) {
+  if (t.consideration?.valuationStatus === "MISMATCH") {
+    warnings.push({
+      type: "VALUATION_MISMATCH",
+      message:
+        `${t.refId} on ${t.exchange} has a valuation mismatch: ` +
+        `reported consideration ₹${t.consideration.reportedInrValue?.toLocaleString("en-IN") ?? "N/A"} ` +
+        `vs determined consideration ₹${t.consideration.inrValue?.toLocaleString("en-IN") ?? "N/A"}.`,
+      refId: t.refId,
+    });
+  }
+}
 
   // 4. Unmatched deposits — the mirror image of orphaned withdrawals: money
   // that arrived with no visible origin in the uploaded data. Tracked

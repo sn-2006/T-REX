@@ -19,9 +19,9 @@ const ROLES = [
 export default function LandingPage() {
   return (
     <section className="card landing-card">
-      <h1>Welcome to ChainTDS</h1>
+      <h1>Welcome to T-REX</h1>
       <p className="muted">
-        Choose how you'd like to sign in. ChainTDS checks whether TDS is correctly
+        Choose how you'd like to sign in. T-REX checks whether TDS is correctly
         accounted for as crypto assets move between exchanges and wallets — the
         gap no single platform can see on its own.
       </p>

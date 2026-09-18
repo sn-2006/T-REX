@@ -1,8 +1,7 @@
-// Prototype stand-in for a real Alchemy call. In the full build this
-// queries the given wallet address for its on-chain transfer history and
-// normalizes it into the same row shape the CSV parser produces, so it can
-// be reconciled alongside exchange data. Here it just fabricates a couple
-// of plausible rows so the "wallet as a stopover" path can be demoed.
+// Fallback used when VITE_WALLET_RPC_URL isn't configured — see
+// adapters/walletAdapter.js for the real Alchemy-backed implementation.
+// Fabricates a couple of plausible rows so the "wallet as a stopover" path
+// can still be demoed offline / without an Alchemy key.
 export function mockWalletTransfers(address) {
   if (!address || address.trim().length < 4) return [];
 

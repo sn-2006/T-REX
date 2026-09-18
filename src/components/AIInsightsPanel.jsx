@@ -62,7 +62,7 @@ export default function AIInsightsPanel({ insights, reportContext }) {
             {messages.map((m, i) => (
               <div key={i} className={`ai-chat-msg ai-chat-${m.role}`}>
                 {m.role === "assistant" && (
-                  <span className="ai-chat-tag">ChainTDS AI</span>
+                  <span className="ai-chat-tag">T-REX AI</span>
                 )}
               <div>{m.text}</div>
               </div>
@@ -81,7 +81,7 @@ export default function AIInsightsPanel({ insights, reportContext }) {
           <input
             type="text"
             className="name-input"
-            placeholder="Ask ChainTDS about this report..."
+            placeholder="Ask T-REX about this report..."
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
             disabled={asking}

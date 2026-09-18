@@ -1,89 +1,58 @@
-import { seedDemoCases } from "./mockCases.js";
-
 // ---------------------------------------------------------------------------
-// Shared "case" store.
+// Case store — now backed by the real ChainTDS API + PostgreSQL (see
+// /server) instead of localStorage. A case is one taxpayer's finalized
+// reconciliation report — everything an auditor or regulator needs to
+// review it (rows, reconciliation output, discrepancies, AI insights,
+// narrative, report hash + anchor). Taxpayers create cases by running a
+// reconciliation and generating a report; auditors review and
+// approve/flag them; regulators see them aggregated read-only.
 //
-// A case is one taxpayer's finalized reconciliation report — everything an
-// auditor or regulator needs to review it (rows, reconciliation output,
-// discrepancies, AI insights, narrative, report hash + anchor). Taxpayers
-// create cases by running a reconciliation and generating a report; auditors
-// review and approve/flag them; regulators see them aggregated read-only.
-//
-// This is a frontend-only prototype, so "the database" is localStorage,
-// seeded on first load with a handful of demo cases so the Auditor and
-// Regulator dashboards aren't empty before any taxpayer has used the app.
+// Every function here is now async (it makes a network call) — callers
+// need to `await` them. Auditor assignment and demo seed data are now
+// handled server-side (round-robin assignment on insert; seed data via
+// `npm run seed` in /server), so `nextAuditorAssignment` and
+// `seedDemoCases` no longer exist here.
 // ---------------------------------------------------------------------------
 
-const CASES_KEY = "chaintds_cases_v1";
+import { apiFetch } from "../api/client.js";
 
-function readRaw() {
-  try {
-    const raw = localStorage.getItem(CASES_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
+export async function upsertCase(caseObj) {
+  return apiFetch("/cases", { method: "POST", body: caseObj });
 }
 
-export function loadCases() {
-  const existing = readRaw();
-  if (existing && Array.isArray(existing)) return existing;
-
-  const seeded = seedDemoCases();
-  localStorage.setItem(CASES_KEY, JSON.stringify(seeded));
-  return seeded;
+export async function updateCaseStatus(id, status, reviewNote) {
+  return apiFetch(`/cases/${encodeURIComponent(id)}/status`, {
+    method: "PATCH",
+    body: { status, reviewNote },
+  });
 }
 
-function saveCases(cases) {
-  localStorage.setItem(CASES_KEY, JSON.stringify(cases));
+// All cases visible to the current role — taxpayer sees their own,
+// auditor sees their assigned queue, regulator sees everything.
+export async function loadCases() {
+  return apiFetch("/cases");
 }
 
-export function upsertCase(caseObj) {
-  const cases = loadCases();
-  const idx = cases.findIndex((c) => c.id === caseObj.id);
-  if (idx >= 0) {
-    cases[idx] = caseObj;
-  } else {
-    cases.unshift(caseObj);
-  }
-  saveCases(cases);
-  return cases;
+export async function casesForTaxpayer() {
+  return apiFetch("/cases/mine");
 }
 
-export function updateCaseStatus(id, status, reviewNote) {
-  const cases = loadCases();
-  const idx = cases.findIndex((c) => c.id === id);
-  if (idx >= 0) {
-    cases[idx] = {
-      ...cases[idx],
-      status,
-      reviewNote: reviewNote ?? cases[idx].reviewNote ?? "",
-      reviewedAt: new Date().toISOString(),
-    };
-    saveCases(cases);
-  }
-  return cases;
+export async function casesForAuditor() {
+  return apiFetch("/cases/assigned");
 }
 
-export function casesForTaxpayer(taxpayerId) {
-  return loadCases().filter((c) => c.taxpayerId === taxpayerId);
+// Taxpayer clients waiting for any auditor to accept them.
+export async function casesUnassigned() {
+  return apiFetch("/cases/unassigned");
 }
 
-export function casesForAuditor(auditorId) {
-  return loadCases().filter((c) => c.auditorId === auditorId);
+// Accept an unassigned client's case — assigns it to the current auditor.
+export async function acceptCase(id) {
+  return apiFetch(`/cases/${encodeURIComponent(id)}/accept`, { method: "POST" });
 }
 
-export function getCase(id) {
-  return loadCases().find((c) => c.id === id) || null;
-}
-
-// Deterministic-ish round robin so demo auditors both get cases assigned.
-const AUDITOR_POOL = ["AUD001", "AUD002"];
-let assignCursor = 0;
-export function nextAuditorAssignment() {
-  const id = AUDITOR_POOL[assignCursor % AUDITOR_POOL.length];
-  assignCursor += 1;
-  return id;
+export async function getCase(id) {
+  return apiFetch(`/cases/${encodeURIComponent(id)}`);
 }
 
 export function deriveStatus(insights) {

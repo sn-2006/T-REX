@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { isChainConfigured, verifyReportOnChain } from "./utils/blockchain";
+import { apiFetch } from "./api/client";
 
 export default function VerifyPage({ hash }) {
   const [status, setStatus] = useState("checking"); // checking | verified | not-found | error
@@ -34,19 +35,33 @@ export default function VerifyPage({ hash }) {
         return;
       }
 
-      // Fallback: no contract configured yet, read the local mock record
-      // instead so the flow is still demoable end-to-end.
+      // Fallback: no contract configured yet, check the database record
+      // instead — this is what makes verification work from any device,
+      // not just the browser that generated the report (localStorage
+      // couldn't do that). If the API itself is unreachable, fall back
+      // further to the local record so the flow stays demoable offline.
       try {
-        const raw = localStorage.getItem(`chaintds_report_${hash}`);
+        const result = await apiFetch(`/verify/${encodeURIComponent(hash)}`, { auth: false });
         if (cancelled) return;
-        if (raw) {
-          setRecord(JSON.parse(raw));
+        if (result.found) {
+          setRecord(result);
           setStatus("verified");
         } else {
           setStatus("not-found");
         }
       } catch {
-        setStatus("not-found");
+        try {
+          const raw = localStorage.getItem(`chaintds_report_${hash}`);
+          if (cancelled) return;
+          if (raw) {
+            setRecord(JSON.parse(raw));
+            setStatus("verified");
+          } else {
+            setStatus("not-found");
+          }
+        } catch {
+          if (!cancelled) setStatus("not-found");
+        }
       }
     }
 
@@ -57,7 +72,7 @@ export default function VerifyPage({ hash }) {
   return (
     <div className="app">
       <header className="app-header">
-        <div className="brand">ChainTDS — Verification</div>
+        <div className="brand">T-REX — Verification</div>
       </header>
       <main className="app-main">
         <section className="card">
@@ -99,7 +114,7 @@ export default function VerifyPage({ hash }) {
           )}
 
           <button className="link-btn" onClick={() => { window.location.hash = ""; }}>
-            Back to ChainTDS
+            Back to T-REX
           </button>
         </section>
       </main>

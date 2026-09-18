@@ -100,7 +100,7 @@ export default function TransactionFlowGraph({ allRows, reconciliation, discrepa
       <div className="flow-legend">
         <span><i className="flow-dot flow-dot-ok" /> Reconciled / clean</span>
         <span><i className="flow-dot flow-dot-gap" /> TDS gap on transfer</span>
-        <span><i className="flow-dot flow-dot-discrepancy" /> TDS discrepancy on sale</span>
+        <span><i className="flow-dot flow-dot-discrepancy" /> Compliance discrepancy on sale</span>
         <span><i className="flow-dot flow-dot-unknown" /> Unmatched / unknown source</span>
       </div>
     </div>
@@ -197,7 +197,16 @@ function buildGraph(allRows, reconciliation, discrepancies = []) {
   for (const r of allRows) {
     if (r.type !== "SELL") continue;
     const disc = discrepancyByRef.get(r.refId);
-    pushEdge(r.exchange, "INR / Bank", `${r.amount} ${r.asset}`, disc ? "discrepancy" : "ok", false);
+const hasTdsDiscrepancy = disc?.hasTdsDiscrepancy === true;
+const hasValuationMismatch = disc?.hasValuationDiscrepancy === true;
+
+pushEdge(
+  r.exchange,
+  "INR / Bank",
+  `${r.amount} ${r.asset}`,
+  hasTdsDiscrepancy || hasValuationMismatch ? "discrepancy" : "ok",
+  false
+);
   }
 
   return { nodes, edges };

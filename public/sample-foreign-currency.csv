@@ -1,0 +1,3 @@
+date,type,asset,amount,price,quote_currency,fx_rate_inr,tds_status,tds_amount,ref_id
+2026-06-27,SELL,BTC,0.01,64500,USDT,87,UNKNOWN,,FX1001
+2026-06-28,SELL,ETH,1.5,3600,USDT,87,UNKNOWN,,FX1002
