@@ -117,6 +117,45 @@ function warningBuckets(warnings, unmatchedDeposits = []) {
   };
 }
 
+function appendDexEvidence(lines, walletList) {
+  const dexEvents = walletList.flatMap((analysis) => [
+    ...(analysis?.derivedDexEvents || []),
+    ...(analysis?.derivedTransactions || []),
+  ]).filter((event, index, all) =>
+    all.findIndex((candidate) => candidate?.refId === event?.refId) === index
+  );
+  const liquidityEvents = walletList.flatMap((analysis) => analysis?.derivedLiquidityEvents || []);
+  const positions = walletList.flatMap((analysis) => analysis?.derivedLiquidityPositions || []);
+
+  if (!dexEvents.length && !liquidityEvents.length && !positions.length) return;
+  lines.push("DEX EVIDENCE");
+  lines.push(`Reconstructed DEX transaction(s): ${dexEvents.length}`);
+  for (const event of dexEvents) {
+    const reconstruction = event.reconstruction || {};
+    const metrics = reconstruction.financialMetrics || null;
+    lines.push(
+      `- ${event.txHash || "Transaction hash UNKNOWN"}: ${reconstruction.kind || "DEX event"}; ` +
+      `pool ${reconstruction.poolAddress || "UNKNOWN"}; route ${reconstruction.routeStatus || "UNKNOWN"}.`
+    );
+    if (reconstruction.route?.length) {
+      lines.push(`  Route hops: ${reconstruction.route.map((hop) => `${hop.tokenIn || "UNKNOWN"} -> ${hop.tokenOut || "UNKNOWN"}`).join(" | ")}`);
+    }
+    if (metrics) {
+      lines.push(`  Price impact: ${metrics.priceImpact?.status || "UNKNOWN"}${metrics.priceImpact?.value == null ? "" : ` (${metrics.priceImpact.value})`}.`);
+      lines.push(`  Trading fee: ${metrics.tradingFee?.status || "UNKNOWN"}${metrics.tradingFee?.value == null ? "" : ` (${metrics.tradingFee.value})`}.`);
+      lines.push(`  Gas cost: ${metrics.gasCost?.status || "UNKNOWN"}${metrics.gasCost?.nativeAmount == null ? "" : ` (${metrics.gasCost.nativeAmount} native units)`}.`);
+    }
+  }
+  for (const event of liquidityEvents) {
+    lines.push(`- Liquidity ${event.eventType || "UNKNOWN"}: ${event.transactionHash || "transaction hash UNKNOWN"}; status ${event.interpretationStatus || "UNKNOWN"}.`);
+  }
+  for (const position of positions) {
+    lines.push(`- LP position ${position.positionStatus || "UNKNOWN"}: pool ${position.poolAddress || "UNKNOWN"}; add ${position.originatingTransactionHash || "UNKNOWN"}; removal ${position.removalTransactionHash || "UNKNOWN"}.`);
+  }
+  lines.push("Only values marked VERIFIED or DERIVED are treated as established; UNKNOWN and PENDING_REVIEW values require verification.");
+  lines.push("");
+}
+
 function generateWalletOnlyNarrative({
   warnings,
   unmatchedDeposits,
@@ -207,6 +246,8 @@ function generateWalletOnlyNarrative({
     "An on-chain movement by itself does not prove the ultimate real-world identity, ultimate source of funds, or that the movement was a taxable disposition."
   );
   lines.push("");
+
+  appendDexEvidence(lines, walletList);
 
   appendRecommendedActions(lines, {
     orphanedWithdrawals: buckets.orphanedWithdrawals,
