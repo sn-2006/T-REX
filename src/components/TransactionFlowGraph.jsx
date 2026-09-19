@@ -31,7 +31,9 @@ export default function TransactionFlowGraph({ allRows, reconciliation, discrepa
 
   const { nodes, edges } = useMemo(
     () => {
-      if (allRows.length === 0) return buildWalletGraph(walletAnalyses);
+      if (Object.keys(walletAnalyses).length > 0) {
+        return buildWalletGraph(walletAnalyses, allRows);
+      }
       return buildGraph(allRows, reconciliation, discrepancies);
     },
     [allRows, reconciliation, discrepancies, walletAnalyses]
@@ -110,7 +112,7 @@ export default function TransactionFlowGraph({ allRows, reconciliation, discrepa
   );
 }
 
-function buildWalletGraph(walletAnalyses) {
+function buildWalletGraph(walletAnalyses, allRows = []) {
   const analyses = Object.values(walletAnalyses).filter(Boolean);
   const nodes = [];
   const edges = [];

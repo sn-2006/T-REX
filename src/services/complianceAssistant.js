@@ -49,6 +49,11 @@ ChainTDS distinguishes between different kinds of discrepancies.
 
 3. A transaction may have both a TDS mismatch and a valuation mismatch.
 
+4. REVIEW_REQUIRED / VALUATION_UNRESOLVED / VALUATION_ESTIMATED means required
+  INR settlement or valuation evidence is incomplete. Distinguish actual INR
+  received from estimated INR FMV. State that manual verification is required.
+  Do not call it a confirmed TDS mismatch, a clean result, or a transfer-matcher failure.
+
 Never call a valuation mismatch a "TDS discrepancy" unless the evidence explicitly says
 hasTdsDiscrepancy is true.
 
@@ -161,9 +166,12 @@ function confidenceTier(score) {
 }
 
 function inr(n) {
-  return `₹${Number(n).toLocaleString("en-IN", {
+  const value = Number(n);
+  return Number.isFinite(value)
+    ? `₹${value.toLocaleString("en-IN", {
     maximumFractionDigits: 2,
-  })}`;
+  })}`
+    : "Unavailable";
 }
 
 // Every evidence packet built by evidenceBuilder.js is inherently
@@ -173,6 +181,11 @@ function inr(n) {
 // (evidence.asset/quantity end up null).
 function hasSufficientEvidence(evidence) {
   if (!evidence) return false;
+  // Pending on-chain review packets are actionable from inventory fields even
+  // when exchange counterparty labels are absent.
+  if (evidence.status === "PENDING_MANUAL_REVIEW") {
+    return Boolean(evidence.transactionId);
+  }
   if (
     "asset" in evidence &&
     evidence.asset === null &&
@@ -381,6 +394,46 @@ export async function investigateTransaction(evidence) {
 }
 
 function templateInvestigate(evidence) {
+  if (evidence.status === "PENDING_MANUAL_REVIEW") {
+    const display = (value) => (value == null || value === "" ? "Unavailable" : value);
+    return (
+      `Transaction #${evidence.transactionId}\n\n` +
+      `Status: PENDING_MANUAL_REVIEW\n\n` +
+      `Reason:\n` +
+      `${evidence.reason || "On-chain movement observed, but ownership or taxable disposition evidence is insufficient for automated reconciliation."}\n\n` +
+      `Evidence:\n` +
+      `• Asset: ${display(evidence.asset)}\n` +
+      `• Quantity: ${display(evidence.quantity)}\n` +
+      `• Direction: ${display(evidence.direction)}\n` +
+      `• Date: ${display(evidence.date)}\n` +
+      `• Transaction hash: ${display(evidence.txHash)}\n` +
+      `• From: ${display(evidence.from || evidence.sourceAddress)}\n` +
+      `• To: ${display(evidence.to || evidence.destinationAddress)}\n` +
+      `• Rule: ${evidence.ruleTriggered}\n\n` +
+      `AI recommendation:\n` +
+      `Manually verify counterparty ownership and whether this movement was a taxable disposition. Do not treat the transfer as reconciled until that evidence is available.`
+    );
+  }
+
+  if (["VALUATION_UNRESOLVED", "VALUATION_ESTIMATED"].includes(evidence.status)) {
+    return (
+      `Transaction #${evidence.transactionId}\n\n` +
+      `Status: REVIEW_REQUIRED\n\n` +
+      `Reason:\n` +
+      `The transaction is a DEX sale. Actual INR received is ${evidence.actualInrReceived == null ? "Unavailable" : inr(evidence.actualInrReceived)} and estimated INR fair-market value is ${evidence.estimatedInrValue == null ? "Unavailable" : inr(evidence.estimatedInrValue)}.\n\n` +
+      `Evidence:\n` +
+      `• Asset: ${evidence.asset}\n` +
+      `• Quantity: ${evidence.quantity}\n` +
+      `• Transaction type: SELL\n` +
+      `• Exchange: ${evidence.sourceExchange}\n` +
+      `• Expected TDS: ${evidence.expectedTds == null ? "Unavailable" : inr(evidence.expectedTds)}\n` +
+      `• Reported TDS: ${evidence.reportedTds == null ? "Unavailable" : inr(evidence.reportedTds)}\n` +
+      `• Rule: ${evidence.ruleTriggered}\n\n` +
+      `AI recommendation:\n` +
+      `Verify the INR valuation and any exchange/bank settlement evidence before finalizing compliance. Do not treat this as a confirmed TDS mismatch.`
+    );
+  }
+
   // VALUATION MISMATCH
   if (
     evidence.hasValuationDiscrepancy === true ||
@@ -722,6 +775,8 @@ function templateAnswer(question, reportContext) {
     q.includes("verify") ||
     q.includes("need")
   ) {
+    const walletPending = Number(reconciliation.walletPendingReviewCount) || 0;
+    const insightPending = Number(insights?.reviewRequiredCount) || 0;
     const items = [
       ...reconciliation.warnings.map((w) => w.refId),
       ...reconciliation.unmatchedDeposits.map((d) => d.refId),
@@ -730,8 +785,12 @@ function templateAnswer(question, reportContext) {
         .map((d) => d.transactionId),
     ];
 
-    if (items.length === 0)
+    if (items.length === 0 && walletPending === 0 && insightPending === 0)
       return "Nothing in this report currently needs manual verification.";
+
+    if (items.length === 0) {
+      return `${Math.max(walletPending, insightPending)} on-chain transfer(s) still require manual verification before compliance can be finalized.`;
+    }
 
     return `These transactions need manual verification before submitting: ${items.join(
       ", "
@@ -743,9 +802,14 @@ function templateAnswer(question, reportContext) {
       ...reconciliation.warnings,
       ...reconciliation.unmatchedDeposits,
     ];
+    const walletPending = Number(reconciliation.walletPendingReviewCount) || 0;
 
-    if (missing.length === 0)
+    if (missing.length === 0 && walletPending === 0)
       return "No missing records were detected — every transfer has a matching counterpart.";
+
+    if (missing.length === 0) {
+      return `${walletPending} on-chain transfer(s) still lack ownership or disposition evidence and require manual review.`;
+    }
 
     return `Missing/unmatched records:\n${missing
       .map((m) => `- ${m.message}`)

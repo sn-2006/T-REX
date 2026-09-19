@@ -141,8 +141,12 @@ export function seedDemoCases() {
       allRows: c.rows,
       reconciliation,
       discrepancies,
+      walletAnalyses: c.walletAnalyses || {},
     });
-    const narrative = generateNarrativeReport(reconciliation);
+    const narrative = generateNarrativeReport({
+      ...reconciliation,
+      walletAnalyses: c.walletAnalyses || {},
+    });
     const reportHash = fakeHash(c.taxpayerId + i);
     const anchor = mockAnchorOnChain(reportHash);
 
@@ -155,6 +159,8 @@ export function seedDemoCases() {
         ? "verified"
         : "pending";
 
+    const walletAnalyses = c.walletAnalyses || {};
+
     return {
       id: reportHash,
       taxpayerId: c.taxpayerId,
@@ -164,7 +170,11 @@ export function seedDemoCases() {
       exchanges: c.exchanges,
       wallets: c.wallets,
       allRows: c.rows,
-      reconciliation,
+      reconciliation: {
+        ...reconciliation,
+        walletAnalyses,
+      },
+      walletAnalyses,
       discrepancies,
       insights,
       narrative,

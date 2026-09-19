@@ -4,8 +4,14 @@ import { withDeterminedConsideration } from "./consideration.js";
 const TDS_RATE = 0.01;
 
 function finiteNumber(value) {
+  if (value == null) return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+}
+
+function sumKnownTds(rows, field) {
+  if (rows.some((row) => row[field] == null)) return null;
+  return Math.round(rows.reduce((sum, row) => sum + row[field], 0) * 100) / 100;
 }
 
 function buildReferenceCandidates(rows) {
@@ -95,6 +101,7 @@ export function computeTdsRows(allRows) {
 
       let reportedTds;
       let reportedSource;
+      const decentralizedDerived = t.transactionSource === "DECENTRALIZED_DEX";
 
       if (typeof t.tdsAmount === "number" && Number.isFinite(t.tdsAmount)) {
         reportedTds = t.tdsAmount;
@@ -102,13 +109,22 @@ export function computeTdsRows(allRows) {
       } else if (expectedTds != null && t.tdsStatus === "DEDUCTED") {
         reportedTds = expectedTds;
         reportedSource = "tds_status=DEDUCTED (assumed full amount, no tds_amount column provided)";
+      } else if (decentralizedDerived && t.tdsStatus === "NOT_REPORTED") {
+        // A reconstructed on-chain event has an expected TDS value, but the
+        // blockchain does not provide a reported TDS deduction. Do not turn
+        // missing evidence into a false TDS mismatch.
+        reportedTds = null;
+        reportedSource = "no reported TDS record in on-chain data";
+      } else if (expectedTds == null || t.tdsStatus == null || t.tdsStatus === "NOT_REPORTED" || t.tdsStatus === "PENDING") {
+        reportedTds = null;
+        reportedSource = "expected or reported TDS evidence unavailable";
       } else {
         reportedTds = 0;
         reportedSource = `tds_status=${t.tdsStatus}`;
       }
 
       const difference =
-        expectedTds == null
+        expectedTds == null || reportedTds == null
           ? null
           : Math.round((expectedTds - reportedTds) * 100) / 100;
 
@@ -124,6 +140,14 @@ export function computeTdsRows(allRows) {
         consideration.valuationStatus === "MISMATCH" &&
         valuationDifference != null &&
         Math.abs(valuationDifference) > 0.5;
+      const status =
+        expectedTds == null || reportedTds == null
+          ? "REVIEW_REQUIRED"
+          : hasValuationDiscrepancy
+            ? "VALUATION_MISMATCH"
+            : difference != null && Math.abs(difference) > 0.5
+              ? "TDS_MISMATCH"
+              : "MATCHED";
 
       if (hasValuationDiscrepancy && riskTier === "low") {
         const valuationPct =
@@ -145,6 +169,8 @@ export function computeTdsRows(allRows) {
         expectedTds,
         reportedTds,
         difference,
+        status,
+        reviewRequired: status === "REVIEW_REQUIRED",
         hasDiscrepancy:
           (difference != null && Math.abs(difference) > 0.5) || hasValuationDiscrepancy,
         hasTdsDiscrepancy: difference != null && Math.abs(difference) > 0.5,
@@ -185,12 +211,8 @@ export function analyzeRows(rows) {
       ).length,
       tdsRows: tdsRows.length,
       discrepancies: tdsRows.filter((r) => r.hasDiscrepancy).length,
-      expectedTds: Math.round(
-        tdsRows.reduce((s, r) => s + (r.expectedTds ?? 0), 0) * 100
-      ) / 100,
-      reportedTds: Math.round(
-        tdsRows.reduce((s, r) => s + (r.reportedTds ?? 0), 0) * 100
-      ) / 100,
+      expectedTds: sumKnownTds(tdsRows, "expectedTds"),
+      reportedTds: sumKnownTds(tdsRows, "reportedTds"),
     },
   };
 }

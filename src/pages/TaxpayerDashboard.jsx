@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import QRCode from "qrcode";
 import { parseExchangeCSV } from "../utils/parseExchange";
 import { SUPPORTED_API_EXCHANGES, fetchExchangeTransactions } from "../adapters";
-import { reconcile } from "../utils/reconcile";
+import { reconcile, withWalletReconciliationFlags } from "../utils/reconcile";
 import { computeTdsDiscrepancies } from "../utils/tdsDiscrepancy";
 import {
   buildComplianceInsights,
@@ -188,122 +188,250 @@ export default function TaxpayerDashboard({ session, onLogout }) {
     }
   }
 
-  async function runReconciliation() {
-    setError("");
+ async function runReconciliation() {
+  setError("");
 
-    const walletAddresses = wallets.map((w) => w.address.trim()).filter(Boolean);
+  const walletAddresses = wallets
+    .map((w) => w.address.trim())
+    .filter(Boolean);
 
-const missingName = exchanges.some((ex) => !ex.name.trim());
-const missingCsv = exchanges.some((ex) => ex.source === "csv" && !ex.file);
-const missingApiRows = exchanges.some((ex) => ex.source === "api" && !ex.rows);
-
-if (
-  walletAddresses.length === 0 &&
-  (missingName || missingCsv || missingApiRows)
-) {
-  setError(
-    "Give every exchange a name, and either upload its statement file or fetch its transactions via API, to continue."
+  // An exchange is required only when the user has not supplied a wallet.
+  // This allows:
+  //   1. CSV/API only
+  //   2. Wallet only
+  //   3. CSV/API + wallet
+  const missingName = exchanges.some((ex) => !ex.name.trim());
+  const missingCsv = exchanges.some(
+    (ex) => ex.source === "csv" && !ex.file
   );
-  return;
-}
+  const missingApiRows = exchanges.some(
+    (ex) => ex.source === "api" && !ex.rows
+  );
 
-    setProcessing(true);
+  if (
+    walletAddresses.length === 0 &&
+    (missingName || missingCsv || missingApiRows)
+  ) {
+    setError(
+      "Add a wallet address or give every exchange a name and either upload its statement file or fetch its transactions via API."
+    );
+    return;
+  }
 
-    try {
-      const parsedGroups = await Promise.all(
-  exchanges
-    .filter((ex) => ex.name.trim() && (ex.source === "api" ? ex.rows : ex.file))
-    .map(async (ex) =>
-      ex.source === "api"
-        ? ex.rows
-        : parseExchangeCSV(await ex.file.text(), ex.name.trim())
-    )
-);
-      
+  setProcessing(true);
 
-      if (walletAddresses.length) {
-        try {
-          await Promise.all(
-            wallets
-              .filter((w) => w.address.trim())
-              .map(async (w) => {
-                const existing = walletAnalyses[w.id];
-                if (existing && existing.wallet.toLowerCase() === w.address.trim().toLowerCase()) {
-                  return existing;
-                }
-                const analysis = await fetchWalletAnalysis(w.address.trim());
-                setWalletAnalyses((state) => ({ ...state, [w.id]: analysis }));
-                return analysis;
-              })
-          );
-          // Wallet provenance is kept in walletAnalyses for the on-chain UI.
-          // It is not copied into the compliance ledger because the wallet
-          // tracer currently reports movements/provenance, not taxable sale
-          // consideration. This also prevents large on-chain histories from
-          // entering the TDS reconciliation payload.
-        } catch (walletErr) {
-          console.error(walletErr);
-          const err = new Error(
-            walletErr.message ||
-              "Couldn't fetch one of the wallets — check the address and server configuration."
-          );
-          err.isWalletFetchError = true;
-          throw err;
-        }
+  try {
+    // ---------------------------------------------------------------
+    // 1. LOAD CENTRALIZED EXCHANGE DATA
+    // ---------------------------------------------------------------
+
+    const parsedGroups = await Promise.all(
+      exchanges
+        .filter(
+          (ex) =>
+            ex.name.trim() &&
+            (ex.source === "api" ? ex.rows : ex.file)
+        )
+        .map(async (ex) =>
+          ex.source === "api"
+            ? ex.rows
+            : parseExchangeCSV(await ex.file.text(), ex.name.trim())
+        )
+    );
+
+    // ---------------------------------------------------------------
+    // 2. LOAD DECENTRALIZED WALLET DATA
+    // ---------------------------------------------------------------
+
+    let walletResults = [];
+
+    if (walletAddresses.length > 0) {
+      try {
+        walletResults = await Promise.all(
+          wallets
+            .filter((w) => w.address.trim())
+            .map(async (w) => {
+              const existing = walletAnalyses[w.id];
+
+              if (
+                existing &&
+                existing.wallet.toLowerCase() ===
+                  w.address.trim().toLowerCase()
+              ) {
+                return {
+                  id: w.id,
+                  analysis: existing,
+                };
+              }
+
+              const analysis = await fetchWalletAnalysis(
+                w.address.trim()
+              );
+
+              return {
+                id: w.id,
+                analysis,
+              };
+            })
+        );
+
+        // Keep wallet analyses in React state for the wallet UI.
+        setWalletAnalyses((state) => {
+          const updated = { ...state };
+
+          for (const { id, analysis } of walletResults) {
+            updated[id] = analysis;
+          }
+
+          return updated;
+        });
+      } catch (walletErr) {
+        console.error(walletErr);
+
+        const err = new Error(
+          walletErr.message ||
+            "Couldn't fetch one of the wallets — check the address and server configuration."
+        );
+
+        err.isWalletFetchError = true;
+        throw err;
       }
+    }
 
-      const rawRows = parsedGroups.flat();
+    // ---------------------------------------------------------------
+    // 3. CENTRALIZED RECONCILIATION
+    // ---------------------------------------------------------------
 
-      // Send the normalized ledger through the backend compliance engine.
-      // The server performs VDA-transfer classification, consideration
-      // determination and deterministic 194S/TDS gating. The frontend keeps
-      // reconciliation/UI rendering unchanged and consumes the authoritative
-      // classified rows returned by the backend.
+    const rawRows = parsedGroups.flat();
+
+    // Wallet analysis can now produce reconstructed DEX events in the same
+    // normalized row shape consumed by the existing compliance engine. Raw
+    // wallet movements remain provenance-only and are never added here.
+    const walletDerivedRows = walletResults.flatMap(
+      ({ analysis }) => analysis?.derivedTransactions || []
+    );
+    const complianceInputRows = [...rawRows, ...walletDerivedRows];
+
+    let allRows = [];
+    let result;
+
+    if (complianceInputRows.length > 0) {
+      // Both centralized CSV/API rows and reconstructed decentralized DEX
+      // events use the same authoritative compliance + TDS pipeline.
       const complianceResult = await apiFetch("/compliance/analyze", {
         method: "POST",
-        body: { rows: rawRows },
+        body: { rows: complianceInputRows },
       });
-      const allRows = complianceResult.rows;
-      const result = reconcile(allRows);
 
-      setReconciliation(result);
-      const walletList = Object.values(walletAnalyses).filter(Boolean);
-      const walletTransferCount = walletList.reduce(
-        (sum, analysis) => sum + (Number(analysis.transferCount) || 0),
-        0
-      );
-      const reportNarrative =
-        allRows.length === 0 && walletTransferCount > 0
-          ? `DECENTRALIZED WALLET ANALYSIS\n\nT-REX analyzed ${walletTransferCount.toLocaleString("en-IN")} observable on-chain transfer(s) across ${walletList.length} wallet(s).\n\nThis wallet analysis is provenance-focused. On-chain movements are not treated as taxable INR trades unless a corresponding taxable disposition is present in exchange/compliance data.\n\nPROVENANCE\nThe displayed flow contains bounded observable transaction edges and address enrichment/risk signals where available. An on-chain path does not by itself prove the ultimate real-world identity or ultimate source of funds.`
-          : generateNarrativeReport(result);
-      setNarrative(reportNarrative);
+      allRows = complianceResult.rows;
 
-      const discrepancyList = computeTdsDiscrepancies(allRows);
+      // Existing reconciliation remains unchanged for centralized rows;
+      // reconstructed DEX events are simply normalized trade rows here.
+      result = reconcile(allRows);
+    } else {
+      // -------------------------------------------------------------
+      // WALLET-ONLY MODE
+      // -------------------------------------------------------------
 
-      setDiscrepancies(discrepancyList);
-      setAllTransactionRows(allRows);
+      result = {
+        tradeSummary: [],
+        transferChecks: [],
+        warnings: [],
+        unmatchedDeposits: [],
 
-      setInsights(
-        buildComplianceInsights({
-          allRows,
-          reconciliation: result,
-          discrepancies: discrepancyList,
-          walletAnalyses,
-        })
-      );
+        mode: "DECENTRALIZED_WALLET",
 
-      setStep("results");
-    } catch (e) {
-      console.error(e);
-      setError(
-        e.isWalletFetchError || e.message
-          ? e.message
-          : "Couldn't parse one of the files — check the CSV format and try again."
-      );
-    } finally {
-      setProcessing(false);
+        walletReconciliation: walletResults
+          .map(({ analysis }) => analysis?.reconciliation)
+          .filter(Boolean),
+      };
     }
+
+    // ---------------------------------------------------------------
+    // 4. COMBINE WALLET RECONCILIATION WITH CENTRALIZED RESULT
+    // ---------------------------------------------------------------
+
+    const walletReconciliation = walletResults
+      .map(({ analysis }) => analysis?.reconciliation)
+      .filter(Boolean);
+
+    // Use the wallet results from THIS run rather than relying on
+    // React state, which updates asynchronously.
+    const walletList = walletResults
+      .map(({ analysis }) => analysis)
+      .filter(Boolean);
+
+    // Fold wallet pending-review inventory into the same warnings channel
+    // used by the dashboard, investigation list, and AI narrative.
+    result = {
+      ...withWalletReconciliationFlags(result, walletList),
+      walletReconciliation,
+    };
+
+    setReconciliation(result);
+
+    const walletTransferCount = walletList.reduce(
+      (sum, analysis) =>
+        sum + (Number(analysis.transferCount) || 0),
+      0
+    );
+
+    // ---------------------------------------------------------------
+    // 5. NARRATIVE — same reconciliation reporting for wallet-only and
+    // exchange/DEX paths (pending review, warnings, recommended actions).
+    // ---------------------------------------------------------------
+
+    const reportNarrative = generateNarrativeReport({
+      ...result,
+      mode: allRows.length === 0 && walletTransferCount > 0 ? "DECENTRALIZED_WALLET" : result.mode,
+      walletAnalyses: walletList,
+      walletTransferCount,
+      walletReconciliation,
+    });
+
+    setNarrative(reportNarrative);
+
+    // ---------------------------------------------------------------
+    // 6. TDS DISCREPANCIES
+    // ---------------------------------------------------------------
+
+    const discrepancyList = computeTdsDiscrepancies(allRows);
+
+    setDiscrepancies(discrepancyList);
+    setAllTransactionRows(allRows);
+
+    // ---------------------------------------------------------------
+    // 7. AI INSIGHTS
+    // ---------------------------------------------------------------
+
+    const walletAnalysesForRun = walletList;
+
+    setInsights(
+      buildComplianceInsights({
+        allRows,
+        reconciliation: result,
+        discrepancies: discrepancyList,
+        walletAnalyses: walletAnalysesForRun,
+      })
+    );
+
+    // ---------------------------------------------------------------
+    // 8. MOVE TO RESULTS
+    // ---------------------------------------------------------------
+
+    setStep("results");
+  } catch (e) {
+    console.error(e);
+
+    setError(
+      e.isWalletFetchError || e.message
+        ? e.message
+        : "Couldn't parse one of the files — check the CSV format and try again."
+    );
+  } finally {
+    setProcessing(false);
   }
+}
 
   async function finalizeReport() {
     setProcessing(true);
@@ -335,6 +463,15 @@ if (
       // taxpayer. The report page below remains available and shows the save
       // warning; the backend case can be retried without resubmitting this
       // blockchain transaction.
+      //
+      // Persist walletAnalyses inside reconciliation JSONB (existing column) and
+      // as a top-level case field so CaseDetail can enrich pending-review evidence
+      // the same way the taxpayer dashboard does.
+      const walletAnalysesForCase = walletAnalyses;
+      const reconciliationForCase = {
+        ...reconciliation,
+        walletAnalyses: walletAnalysesForCase,
+      };
       let caseSaveError = "";
       try {
         await upsertCase({
@@ -342,7 +479,8 @@ if (
           exchanges: exchanges.map((ex) => ex.name.trim()),
           wallets: wallets.filter((w) => w.address.trim()).map((w) => w.address.trim()),
           allRows: allTransactionRows,
-          reconciliation,
+          reconciliation: reconciliationForCase,
+          walletAnalyses: walletAnalysesForCase,
           discrepancies,
           insights,
           narrative,
@@ -705,7 +843,15 @@ if (
                       </div>
 
                       <div className="wallet-analysis-stats">
-                        <div><span>Transfers</span><strong>{analysis.transferCount}</strong></div>
+                        <div><span>Raw transfers</span><strong>{Number(analysis.traceability?.rawTransferCount ?? analysis.transferCount ?? 0).toLocaleString("en-IN")}</strong></div>
+                        <div><span>Accounted</span><strong>{Number(analysis.traceability?.accountedTransferCount || 0).toLocaleString("en-IN")}</strong></div>
+                        <div><span>Verified</span><strong>{Number(analysis.traceability?.verifiedRecordCount || 0).toLocaleString("en-IN")}</strong></div>
+                        <div><span>Estimated value</span><strong>{Number(analysis.traceability?.estimatedValueRecordCount || 0).toLocaleString("en-IN")}</strong></div>
+                        <div><span>DEX events</span><strong>{Number(analysis.traceability?.reconstructedEventCount ?? analysis.derivedDexEventCount ?? 0).toLocaleString("en-IN")}</strong></div>
+                        <div><span>Compliance rows</span><strong>{Number(analysis.traceability?.complianceRowCount || 0).toLocaleString("en-IN")}</strong></div>
+                        <div><span>Excluded</span><strong>{Number(analysis.traceability?.excludedTransferCount || 0).toLocaleString("en-IN")}</strong></div>
+                        <div><span>Pending review</span><strong>{Number(analysis.traceability?.pendingReviewCount || 0).toLocaleString("en-IN")}</strong></div>
+                        <div><span>Unmatched</span><strong>{Number(analysis.traceability?.unmatchedTransferCount || 0).toLocaleString("en-IN")}</strong></div>
                         <div><span>Counterparties</span><strong>{analysis.provenance?.counterparties?.length || 0}</strong></div>
                         <div>
   <span>MetaSleuth</span>
@@ -791,13 +937,13 @@ if (
                   walletAnalyses={walletAnalyses}
                 />
 
-                {allTransactionRows.length === 0 && Object.keys(walletAnalyses).length > 0 && (
+                {Object.keys(walletAnalyses).length > 0 && (
                   <section className="wallet-analysis-results">
                     <h3>Decentralized wallet analysis</h3>
-                    <p className="muted small">On-chain provenance is reported separately from taxable exchange trades.</p>
+                    <p className="muted small">Raw on-chain movements, reconstructed DEX events, and MetaSleuth enrichment are shown separately from the unified compliance rows.</p>
                     <table className="data-table">
                       <thead>
-                        <tr><th>Wallet</th><th>Chain</th><th>Transfers</th><th>Counterparties</th><th>MetaSleuth</th><th>Risk</th></tr>
+                        <tr><th>Wallet</th><th>Chain</th><th>Raw transfers</th><th>DEX events</th><th>Compliance rows</th><th>Excluded</th><th>Pending review</th><th>Counterparties</th><th>MetaSleuth</th><th>Risk</th></tr>
                       </thead>
                       <tbody>
                         {Object.entries(walletAnalyses).map(([walletId, analysis]) => {
@@ -808,7 +954,11 @@ if (
                             <tr key={walletId}>
                               <td><code>{analysis.wallet}</code></td>
                               <td>{analysis.chain?.name || "Ethereum Mainnet"}</td>
-                              <td>{Number(analysis.transferCount || 0).toLocaleString("en-IN")}</td>
+                              <td>{Number(analysis.traceability?.rawTransferCount ?? analysis.transferCount ?? 0).toLocaleString("en-IN")}</td>
+                              <td>{Number(analysis.traceability?.reconstructedEventCount ?? analysis.derivedDexEventCount ?? 0).toLocaleString("en-IN")}</td>
+                              <td>{Number(analysis.traceability?.complianceRowCount || 0).toLocaleString("en-IN")}</td>
+                              <td>{Number(analysis.traceability?.excludedTransferCount || 0).toLocaleString("en-IN")}</td>
+                              <td>{Number(analysis.traceability?.pendingReviewCount || 0).toLocaleString("en-IN")}</td>
                               <td>{analysis.provenance?.counterparties?.length || 0}</td>
                               <td>{analysis.enrichment?.status === "live" ? "Live" : analysis.enrichment?.status === "partial" ? "Partial" : analysis.enrichment?.status === "rate_limited" ? "Rate limited" : "Not configured"}</td>
                               <td>{rootNode?.riskScore ?? "—"}</td>
@@ -819,6 +969,35 @@ if (
                     </table>
                   </section>
                 )}
+
+                {Object.entries(walletAnalyses).map(([walletId, analysis]) => (
+                  <section className="wallet-analysis-results" key={`${walletId}-audit`}>
+                    <h3>Transaction-level audit</h3>
+                    <p className="muted small">
+                      Raw transfers are accounted for separately from fully verified economic events and compliance rows.
+                    </p>
+                    <div className="data-table-wrap">
+                      <table className="data-table">
+                        <thead>
+                          <tr><th>Transfer</th><th>Asset / amount</th><th>Block</th><th>Linked event</th><th>Status</th><th>Valuation</th><th>Reason</th></tr>
+                        </thead>
+                        <tbody>
+                          {(analysis.traceability?.inventory || []).map((item) => (
+                            <tr key={item.rawTransferId}>
+                              <td><code>{item.txHash || item.rawTransferId}</code><div className="muted small">{item.direction} · {item.transactionCategory || "unknown"}</div></td>
+                              <td>{item.amount == null ? "Unavailable" : `${item.amount} ${item.asset}`}</td>
+                              <td>{item.blockNumber || "Unavailable"}</td>
+                              <td>{item.linkedEconomicEventId || "None"}</td>
+                              <td>{item.status}</td>
+                              <td>{item.valuationStatus}</td>
+                              <td>{item.reason}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+                ))}
 
                 <h3>Trade summary</h3>
                 <table className="data-table">
@@ -839,7 +1018,7 @@ if (
                         <td>{s.asset}</td>
                         <td>{s.tradeCount}</td>
                         <td>{s.totalTraded.toFixed(4)}</td>
-                        <td>₹{s.totalInr.toLocaleString("en-IN")}</td>
+                        <td>{s.totalInr == null ? "Unavailable" : `₹${s.totalInr.toLocaleString("en-IN")}`}</td>
                         <td>{s.tdsDeductedCount}/{s.tradeCount}</td>
                       </tr>
                     ))}
@@ -881,7 +1060,8 @@ if (
 
                 <h3>Warnings</h3>
                 {reconciliation.warnings.length === 0 &&
-                reconciliation.unmatchedDeposits.length === 0 ? (
+                reconciliation.unmatchedDeposits.length === 0 &&
+                !(Number(reconciliation.walletPendingReviewCount) > 0) ? (
                   <p className="muted">No warnings — everything reconciled cleanly.</p>
                 ) : (
                   <ul className="warning-list">
@@ -907,6 +1087,7 @@ if (
                             evidence={buildTransactionEvidence(flag, {
                               reconciliation,
                               allRows: allTransactionRows,
+                              walletAnalyses,
                             })}
                           />
                         )

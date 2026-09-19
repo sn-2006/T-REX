@@ -7,6 +7,16 @@ const router = Router();
 // Every field the frontend's caseStore.js/mockCases.js currently reads —
 // keep this in sync with the `SELECT` list below.
 function rowToCase(row, transactions) {
+  const reconciliation = row.reconciliation || {};
+  // Prefer an explicit column when present; otherwise recover from the
+  // snapshot embedded in reconciliation JSONB at save time.
+  const walletAnalyses =
+    row.wallet_analyses && typeof row.wallet_analyses === "object"
+      ? row.wallet_analyses
+      : reconciliation.walletAnalyses && typeof reconciliation.walletAnalyses === "object"
+        ? reconciliation.walletAnalyses
+        : {};
+
   return {
     id: row.id,
     taxpayerId: row.taxpayer_external_id,
@@ -27,7 +37,8 @@ function rowToCase(row, transactions) {
       tdsAmount: t.tds_amount === null ? null : Number(t.tds_amount),
       refId: t.ref_id,
     })),
-    reconciliation: row.reconciliation,
+    reconciliation,
+    walletAnalyses,
     discrepancies: row.discrepancies,
     insights: row.insights,
     narrative: row.narrative,
