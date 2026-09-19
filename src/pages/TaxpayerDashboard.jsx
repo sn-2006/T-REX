@@ -898,6 +898,48 @@ export default function TaxpayerDashboard({ session, onLogout }) {
                       <div className="wallet-enrichment-note">
                         {analysis.enrichment?.note}
                       </div>
+
+                      {(analysis.derivedTransactions?.length || analysis.derivedLiquidityEvents?.length || analysis.derivedLiquidityPositions?.length) > 0 && (
+                        <div className="wallet-dex-evidence">
+                          <h4>DEX evidence</h4>
+                          {(analysis.derivedTransactions || []).map((event) => {
+                            const reconstruction = event.reconstruction || {};
+                            const metrics = reconstruction.financialMetrics || {};
+                            const display = (value) => value == null || value === "" ? "UNKNOWN" : String(value);
+                            return (
+                              <div className="wallet-dex-event" key={event.refId || event.txHash}>
+                                <strong>{reconstruction.kind || event.type || "DEX event"}</strong>
+                                <span>Tx: {display(event.txHash)}</span>
+                                <span>Pool: {display(reconstruction.poolAddress)}</span>
+                                <span>Route: {reconstruction.route?.length
+                                  ? reconstruction.route.map((hop) => `${display(hop.tokenIn)} → ${display(hop.tokenOut)}`).join(" | ")
+                                  : display(reconstruction.routeStatus)}</span>
+                                <span>Price impact: {display(metrics.priceImpact?.status)}{metrics.priceImpact?.value == null ? "" : ` (${metrics.priceImpact.value})`}</span>
+                                <span>Trading fee: {display(metrics.tradingFee?.status)}{metrics.tradingFee?.value == null ? "" : ` (${metrics.tradingFee.value})`}</span>
+                                <span>Gas: {display(metrics.gasCost?.status)}{metrics.gasCost?.nativeAmount == null ? "" : ` (${metrics.gasCost.nativeAmount} native)`}</span>
+                              </div>
+                            );
+                          })}
+                          {(analysis.derivedLiquidityEvents || []).map((event) => (
+                            <div className="wallet-dex-event" key={`${event.transactionHash}-${event.logIndex}`}>
+                              <strong>{event.eventType || "LIQUIDITY_UNKNOWN"}</strong>
+                              <span>Pool: {event.poolAddress || "UNKNOWN"}</span>
+                              <span>Provider: {event.providerAddress || "UNKNOWN"}</span>
+                              <span>Status: {event.interpretationStatus || "UNKNOWN"}</span>
+                              <span>Tx: {event.transactionHash || "UNKNOWN"}</span>
+                            </div>
+                          ))}
+                          {(analysis.derivedLiquidityPositions || []).map((position) => (
+                            <div className="wallet-dex-event" key={position.positionId}>
+                              <strong>LP position: {position.positionStatus || "UNKNOWN"}</strong>
+                              <span>Pool: {position.poolAddress || "UNKNOWN"}</span>
+                              <span>Provider: {position.providerAddress || "UNKNOWN"}</span>
+                              <span>Add: {position.originatingTransactionHash || "UNKNOWN"}</span>
+                              <span>Remove: {position.removalTransactionHash || "UNKNOWN"}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   );
                 })}

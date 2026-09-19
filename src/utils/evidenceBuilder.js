@@ -249,6 +249,60 @@ function findWalletInventoryItem(refId, walletAnalyses = []) {
   return null;
 }
 
+function findWalletDexEvidence(refId, walletAnalyses = [], sourceRow = null) {
+  const list = Array.isArray(walletAnalyses)
+    ? walletAnalyses.filter(Boolean)
+    : Object.values(walletAnalyses || {}).filter(Boolean);
+  for (const analysis of list) {
+    const dexEvents = [
+      ...(analysis.derivedDexEvents || []),
+      ...(analysis.derivedTransactions || []),
+    ];
+    const event = dexEvents.find((candidate) =>
+      candidate?.refId === refId ||
+      candidate?.txHash === refId ||
+      candidate?.reconstruction?.txHash === refId
+    );
+    if (event) {
+      const reconstruction = event.reconstruction || {};
+      const valuationEvidence = event.valuationEvidence || {};
+      const transactionHash = event.txHash || valuationEvidence.transactionHash || null;
+      return {
+        transactionHash,
+        poolAddress: reconstruction.poolAddress || valuationEvidence.poolAddress || null,
+        route: reconstruction.route || valuationEvidence.route || null,
+        liquidityEvents: (analysis.derivedLiquidityEvents || []).filter(
+          (liquidity) => liquidity.transactionHash === transactionHash || liquidity.txHash === transactionHash
+        ),
+        liquidityPositions: (analysis.derivedLiquidityPositions || []).filter(
+          (position) =>
+            position.originatingTransactionHash === transactionHash ||
+            position.removalTransactionHash === transactionHash
+        ),
+        financialMetrics: reconstruction.financialMetrics || valuationEvidence.financialMetrics || null,
+        rawEvidence: {
+          decodedEvents: reconstruction.decodedEvents || valuationEvidence.ammEvents || [],
+          uninterpretedLogs: reconstruction.uninterpretedLogs || [],
+          valuationEvidence,
+        },
+      };
+    }
+  }
+
+  if (sourceRow?.transactionSource === "DECENTRALIZED_DEX") {
+    return {
+      transactionHash: sourceRow.txHash || null,
+      poolAddress: sourceRow.valuationEvidence?.poolAddress || null,
+      route: sourceRow.valuationEvidence?.route || null,
+      liquidityEvents: [],
+      liquidityPositions: [],
+      financialMetrics: sourceRow.valuationEvidence?.financialMetrics || null,
+      rawEvidence: { valuationEvidence: sourceRow.valuationEvidence || null },
+    };
+  }
+  return null;
+}
+
 /**
  * Resolve wallet analyses for a persisted auditor/regulator case.
  * Prefer the top-level case field; fall back to the snapshot embedded in
@@ -364,6 +418,7 @@ export function buildTransactionEvidence(flag, { reconciliation, allRows, wallet
       actualInrReceived: sourceRow?.actualInrReceived ?? null,
       estimatedInrValue: sourceRow?.estimatedInrValue ?? null,
       valuationEvidence: sourceRow?.valuationEvidence ?? null,
+      dexEvidence: findWalletDexEvidence(flag.refId, walletAnalyses, sourceRow),
       expectedTds: null,
       reportedTds: null,
       ruleTriggered: "INR valuation required before expected TDS can be determined",
@@ -380,6 +435,7 @@ export function buildTransactionEvidence(flag, { reconciliation, allRows, wallet
     const from = firstAvailable(flag.from, inventory?.from);
     const to = firstAvailable(flag.to, inventory?.to);
     const reason = firstAvailable(flag.reason, inventory?.reason);
+    const dexEvidence = findWalletDexEvidence(flag.refId, walletAnalyses);
 
     return {
       transactionId: flag.refId,
@@ -402,6 +458,7 @@ export function buildTransactionEvidence(flag, { reconciliation, allRows, wallet
       reportedTds: null,
       reason,
       evidenceSources: flag.evidenceSources || inventory?.evidenceSources || null,
+      dexEvidence,
       ruleTriggered:
         "On-chain movement observed, but ownership or taxable disposition evidence is insufficient for automated reconciliation",
     };
@@ -426,6 +483,7 @@ export function buildTransactionEvidence(flag, { reconciliation, allRows, wallet
 
   const sourceRow = allRows.find((r) => r.refId === flag.refId);
   const isWithdrawal = flag.type === "ORPHANED_WITHDRAWAL";
+  const dexEvidence = findWalletDexEvidence(flag.refId, walletAnalyses, sourceRow);
 
   // Best partial match, even if it didn't clear the matcher's thresholds —
   // useful context for "why wasn't this matched" even when nothing matched.
@@ -463,6 +521,7 @@ export function buildTransactionEvidence(flag, { reconciliation, allRows, wallet
       ? { transactionId: bestCandidate.refId, exchange: bestCandidate.exchange, amount: bestCandidate.amount, date: bestCandidate.date }
       : null,
     recordsUsedForReconciliation: [sourceRow?.refId, bestCandidate?.refId].filter(Boolean),
+    dexEvidence,
     ruleTriggered: `Transfer matcher: same asset, amount within 0.01%, ${5}-day window`,
   };
 }

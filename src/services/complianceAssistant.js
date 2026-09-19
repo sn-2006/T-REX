@@ -54,6 +54,15 @@ ChainTDS distinguishes between different kinds of discrepancies.
   received from estimated INR FMV. State that manual verification is required.
   Do not call it a confirmed TDS mismatch, a clean result, or a transfer-matcher failure.
 
+  ==================================================
+  DEX EVIDENCE
+  ==================================================
+
+  When DEX evidence is present, explain reconstructed swaps, route hops, liquidity
+  events, LP position status, and financial metrics only from the supplied fields.
+  Distinguish VERIFIED/DERIVED from UNKNOWN, INCOMPLETE, and PENDING_REVIEW.
+  Never turn null, UNKNOWN, or PENDING_REVIEW into a numeric estimate or a confirmed fact.
+
 Never call a valuation mismatch a "TDS discrepancy" unless the evidence explicitly says
 hasTdsDiscrepancy is true.
 
@@ -564,10 +573,14 @@ function templateInvestigate(evidence) {
 
 
   // existing code continues here...
+    const walletList = Array.isArray(reportContext.walletAnalyses)
+      ? reportContext.walletAnalyses.filter(Boolean)
+      : Object.values(reportContext.walletAnalyses || {}).filter(Boolean);
   const evidenceUsed = [
     `${reportContext.discrepancies.length} discrepancy record(s)`,
     `${reportContext.reconciliation.transferChecks.length} transfer match(es)`,
     `${reportContext.reconciliation.warnings.length + reportContext.reconciliation.unmatchedDeposits.length} flagged transaction(s)`,
+    `${walletList.reduce((sum, analysis) => sum + Number(analysis?.derivedDexEventCount || 0), 0)} reconstructed DEX transaction(s)`,
   ];
   const normalizedQuestion = question.toLowerCase();
   if (
@@ -689,6 +702,7 @@ if (normalizedQuestion.includes("tds gap")) {
         transferChecks: reportContext.reconciliation.transferChecks,
         warnings: reportContext.reconciliation.warnings,
         unmatchedDeposits: reportContext.reconciliation.unmatchedDeposits,
+        walletAnalyses: reportContext.walletAnalyses || [],
       },
       null,
       2

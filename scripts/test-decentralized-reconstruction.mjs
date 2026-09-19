@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { Interface } from "ethers";
 
 process.env.ALCHEMY_ETH_RPC_URL = "https://mock.invalid";
 delete process.env.METASLEUTH_ADDRESS_LABEL_API_KEY;
@@ -6,10 +7,29 @@ delete process.env.METASLEUTH_RISK_SCORE_API_KEY;
 
 const wallet = "0x1111111111111111111111111111111111111111";
 const router = "0x7a250d5630b4cf539739df2c5dacab4c659f2488";
+const pairAddress = "0xb4e16d0168e52d35cacd2c6185b44281ec28c9dc";
 const hash = `0x${"ab".repeat(32)}`;
 const unrelatedHash = `0x${"cd".repeat(32)}`;
 const timestamp = "2026-08-20T12:00:00.000Z";
 const originalFetch = global.fetch;
+
+// Pre-encode V2 Swap + Sync events for realistic receipt logs.
+const v2 = new Interface([
+  "event Swap(address indexed sender, uint amount0In, uint amount1In, uint amount0Out, uint amount1Out, address indexed to)",
+  "event Sync(uint112 reserve0, uint112 reserve1)",
+]);
+const v2SwapEncoded = v2.encodeEventLog(v2.getEvent("Swap"), [
+  router, // sender
+  100000000000000000n, // amount0In: 0.1 ETH
+  0n, // amount1In
+  0n, // amount0Out
+  500000000n, // amount1Out: 500 USDC (6 decimals)
+  wallet, // to
+]);
+const v2SyncEncoded = v2.encodeEventLog(v2.getEvent("Sync"), [
+  4500000000000000000000n, // reserve0
+  11250000000000n, // reserve1
+]);
 
 global.fetch = async (url, options = {}) => {
   if (String(url).startsWith("https://mock.invalid")) {
@@ -76,7 +96,26 @@ global.fetch = async (url, options = {}) => {
       return new Response(JSON.stringify({
         jsonrpc: "2.0",
         id: 1,
-        result: { status: "0x1", gasUsed: "0x5208" },
+        result: {
+          status: "0x1",
+          gasUsed: "0x5208",
+          logs: [
+            {
+              address: pairAddress,
+              topics: v2SwapEncoded.topics,
+              data: v2SwapEncoded.data,
+              transactionHash: hash,
+              logIndex: "0x1",
+            },
+            {
+              address: pairAddress,
+              topics: v2SyncEncoded.topics,
+              data: v2SyncEncoded.data,
+              transactionHash: hash,
+              logIndex: "0x2",
+            },
+          ],
+        },
       }), { status: 200, headers: { "content-type": "application/json" } });
     }
   }

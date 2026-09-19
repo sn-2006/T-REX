@@ -1,6 +1,14 @@
 import { reconcileWallet } from "../../../src/utils/reconcile.js";
 import { withTransactionClassification } from "../../../src/utils/transactionClassifier.js";
 import { resolveHistoricalInrValuation } from "./inrValuation.js";
+import { computeAmmFinancialMetrics } from "./ammFinancialMetrics.js";
+import {
+  decodeReceiptAmmEvents,
+  detectLiquidityActivities,
+  trackLiquidityPositions,
+  reconstructAmmRoute,
+  computeEvidenceConfidence,
+} from "./dexEventDecoder.js";
 
 const ETH_MAINNET_CHAIN_ID = 1;
 const MAX_PAGES = Number(process.env.WALLET_MAX_PAGES || 20);
@@ -12,31 +20,6 @@ const TRANSACTION_CACHE = new Map();
 
 const METASLEUTH_LABEL_URL = "https://aml.blocksec.com/address-label/api/v3/batch-labels";
 const METASLEUTH_RISK_URL = "https://aml.blocksec.com/address-compliance/api/v3/risk-score";
-
-// Common Ethereum mainnet DEX/router contracts. These are detection hints,
-// not proof that a transaction is taxable. A transaction still needs the
-// wallet-side asset-flow pattern below before it is reconstructed as a swap.
-const KNOWN_DEX_ADDRESSES = new Set([
-  "0x7a250d5630b4cf539739df2c5dacab4c659f2488", // Uniswap V2 Router02
-  "0xe592427a0aece92de3edee1f18e0157c05861564", // Uniswap V3 SwapRouter
-  "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45", // Uniswap V3 SwapRouter02
-  "0xef1c6e67703c7bd7107eed8303fbe6ec2554bf6b", // Uniswap Universal Router v1
-  "0x66a9893cc07d91d95644aedd05d03f95e1dba8af", // Uniswap Universal Router v2
-  "0xd9e1ce17f2641f24ae83637ab66a2cca9c378b9f", // SushiSwap Router
-]);
-
-const KNOWN_SWAP_SELECTORS = new Set([
-  "0x7ff36ab5", // Uniswap V2 swapExactETHForTokens
-  "0xfb3bdb41", // Uniswap V2 swapETHForExactTokens
-  "0x18cbafe5", // Uniswap V2 swapExactTokensForETH
-  "0x4a25d94a", // Uniswap V2 swapTokensForExactETH
-  "0x38ed1739", // Uniswap V2 swapExactTokensForTokens
-  "0x8803dbee", // Uniswap V2 swapTokensForExactTokens
-  "0x414bf389", // Uniswap V3 exactInputSingle
-  "0xdb3e2198", // Uniswap V3 exactOutputSingle
-  "0xc04b8d59", // Uniswap V3 exactInput
-  "0x09b81346", // Uniswap V3 exactOutput
-]);
 
 const STABLECOINS = new Set(["USDC", "USDT", "DAI", "USDS", "USDE"]);
 
@@ -167,7 +150,6 @@ function aggregateWalletMovements(transfers, rootAddress) {
     const isIn = to === root;
     if (!isOut && !isIn) continue;
     const asset = assetName(t);
-    if (!asset) continue;
     const key = `${t.hash}:${asset}`;
     const current = map.get(key) || {
       hash: t.hash,
@@ -220,6 +202,29 @@ async function getTransaction(hash) {
     TRANSACTION_CACHE.set(hash, null);
     return null;
   }
+}
+
+function buildGasEvidence(receipt, transaction, transactionHash) {
+  const parseBigInt = (value) => {
+    if (value == null || value === "") return null;
+    try {
+      return BigInt(value);
+    } catch {
+      return null;
+    }
+  };
+  const gasUsed = parseBigInt(receipt?.gasUsed);
+  const gasPrice = parseBigInt(transaction?.gasPrice);
+  const gasFeeWei = gasUsed != null && gasPrice != null ? gasUsed * gasPrice : null;
+  const gasFeeEth = gasFeeWei == null ? null : Number(gasFeeWei) / 1e18;
+  return {
+    transactionHash,
+    gasUsed: gasUsed == null ? null : gasUsed.toString(),
+    gasPrice: gasPrice == null ? null : gasPrice.toString(),
+    gasFeeWei: gasFeeWei == null ? null : gasFeeWei.toString(),
+    gasFeeEth: Number.isFinite(gasFeeEth) ? gasFeeEth : null,
+    evidence: { transactionHash, receiptStatus: receipt?.status || null },
+  };
 }
 
 async function fetchUsdInr(date) {
@@ -347,10 +352,39 @@ function dexSignal(tx, label) {
   const selector = input.slice(0, 10);
   const entity = String(label?.main_entity || label?.main_entity_info?.entity || "").toLowerCase();
   const nameTag = String(label?.name_tag || "").toLowerCase();
-  const knownAddress = KNOWN_DEX_ADDRESSES.has(to);
-  const knownSelector = KNOWN_SWAP_SELECTORS.has(selector);
-  const labelLooksDex = /(uniswap|sushiswap|1inch|curve|paraswap|dex|swap|router)/i.test(`${entity} ${nameTag}`);
-  return { knownAddress, knownSelector, labelLooksDex, selector, to, isContractCall: Boolean(tx?.to && input && input !== "0x") };
+  return { hasEntityLabel: Boolean(entity || nameTag), selector, to, isContractCall: Boolean(tx?.to && input && input !== "0x") };
+}
+
+async function reconstructLiquidityEvents(rootAddress, transfers) {
+  const grouped = aggregateWalletMovements(transfers, rootAddress);
+  const byHash = new Map();
+  for (const movement of grouped) {
+    if (!byHash.has(movement.hash)) byHash.set(movement.hash, []);
+    byHash.get(movement.hash).push(movement);
+  }
+
+  const activities = [];
+  for (const [hash, movements] of byHash) {
+    const txRecord = await getTransaction(hash);
+    if (!txRecord?.receipt) continue;
+    const ammResult = decodeReceiptAmmEvents(txRecord.receipt.logs, hash);
+    const detected = detectLiquidityActivities({
+      decodedEvents: ammResult.decodedEvents,
+      logs: txRecord.receipt.logs,
+    });
+    for (const activity of detected) {
+      const isAddition = activity.eventType === "LIQUIDITY_ADD";
+      const walletMovement = movements.some((movement) => isAddition
+        ? movement.outgoingAmount > 0
+        : movement.incomingAmount > 0);
+      if (!walletMovement) continue;
+      activities.push({
+        ...activity,
+        sourceTransferRefs: [...new Set(movements.flatMap((movement) => movement.transferRefs))],
+      });
+    }
+  }
+  return activities;
 }
 
 async function reconstructDexEvents(rootAddress, transfers, labels) {
@@ -375,10 +409,30 @@ async function reconstructDexEvents(rootAddress, transfers, labels) {
     const receipt = txRecord.receipt;
     const label = labels[String(tx.to || "").toLowerCase()] || null;
     const signal = dexSignal(tx, label);
-    if (!(signal.isContractCall && (signal.knownAddress || signal.knownSelector || signal.labelLooksDex))) continue;
+    // Decode receipt logs first — they are the primary evidence source.
+    const ammResult = decodeReceiptAmmEvents(receipt?.logs, hash);
+    const { decodedEvents: decodedAmmEvents, uninterpretedLogs, hasAmmSwap, primaryPoolAddress, allPoolAddresses } = ammResult;
+    const hasLiquidityEvent = decodedAmmEvents.some((event) => ["Mint", "Burn"].includes(event.eventType));
+    // Evidence-driven gate: admit candidate if (a) receipt contains a verified AMM swap,
+    // (b) entity metadata labels the destination as a DEX, or (c) receipt contains any
+    // verified AMM event (Sync/Mint/Burn alongside opposing flows). Never gate on a
+    // hardcoded address list or function selector list.
+    const hasAmmEvent = decodedAmmEvents.length > 0;
+    if (!hasAmmSwap && hasLiquidityEvent) continue;
+    if (!(signal.isContractCall && (hasAmmSwap || hasAmmEvent))) continue;
     const out = outgoing.sort((a, b) => b.outgoingAmount - a.outgoingAmount)[0];
     const inn = incoming.sort((a, b) => b.incomingAmount - a.incomingAmount)[0];
     if (!out || !inn || out.asset === inn.asset) continue;
+    const route = reconstructAmmRoute({
+      decodedEvents: decodedAmmEvents,
+      logs: receipt?.logs,
+      walletTransfers: { outgoing: out, incoming: inn },
+    });
+    const financialMetrics = computeAmmFinancialMetrics({
+      decodedEvents: decodedAmmEvents,
+      route: route.route,
+      gasEvidence: buildGasEvidence(receipt, tx, hash),
+    });
     const timestamp = out.timestamp || inn.timestamp || null;
     const fxRate = await fetchUsdInr(timestamp);
     const receivedValuation = await resolveHistoricalInrValuation({
@@ -394,6 +448,7 @@ async function reconstructDexEvents(rootAddress, transfers, labels) {
       ? Number((settledInr / inn.incomingAmount).toFixed(12))
       : null;
     const spentStableFmv = STABLECOINS.has(out.asset) && fxRate != null ? fxRate : null;
+
     const row = {
       date: timestamp ? new Date(timestamp).toISOString() : null,
       exchange: label?.main_entity || label?.name_tag || "DEX",
@@ -418,6 +473,15 @@ async function reconstructDexEvents(rootAddress, transfers, labels) {
         blockNumber: out.blockNumber || null,
         receiptStatus: receipt?.status || null,
         receiptLogCount: Array.isArray(receipt?.logs) ? receipt.logs.length : null,
+        decodedReceiptEventCount: decodedAmmEvents.length,
+        uninterpretedLogCount: uninterpretedLogs.length,
+        poolAddress: primaryPoolAddress,
+        ammEvents: decodedAmmEvents,
+        route: route.route,
+        routeStatus: route.routeStatus,
+        logicalInput: route.logicalInput,
+        logicalOutput: route.logicalOutput,
+        financialMetrics,
       },
       tdsStatus: "NOT_REPORTED",
       tdsAmount: null,
@@ -429,7 +493,14 @@ async function reconstructDexEvents(rootAddress, transfers, labels) {
       provenanceOnly: false,
       reconstruction: {
         kind: "DEX_SWAP",
-        confidence: signal.knownAddress || signal.knownSelector ? 95 : 85,
+        ...computeEvidenceConfidence({
+          hasOpposingFlow: true,
+          hasAmmSwap,
+          hasAmmEvent: decodedAmmEvents.length > 0,
+          isSuccess: receipt?.status === "0x1",
+          hasEntityLabel: signal.hasEntityLabel,
+          hasValuation: settledInr != null,
+        }),
         dexAddress: tx.to || null,
         dexEntity: label?.main_entity || label?.main_entity_info?.entity || null,
         dexNameTag: label?.name_tag || "",
@@ -440,6 +511,16 @@ async function reconstructDexEvents(rootAddress, transfers, labels) {
           ...new Set([...outgoing, ...incoming].flatMap((movement) => movement.transferRefs)),
         ],
         valuation: receivedValuation.valuationStatus,
+        verifiedByReceipt: hasAmmSwap,
+        poolAddress: primaryPoolAddress,
+        poolAddresses: allPoolAddresses,
+        decodedEvents: decodedAmmEvents,
+        uninterpretedLogs,
+        route: route.route,
+        routeStatus: route.routeStatus,
+        logicalInput: route.logicalInput,
+        logicalOutput: route.logicalOutput,
+        financialMetrics,
       },
     };
     candidates.push(withTransactionClassification(row));
@@ -481,6 +562,8 @@ export async function analyzeEthereumWallet(address, { includeNormalizedRows = f
   // destination was among the MetaSleuth-enriched addresses, its label is also
   // used as a supporting signal.
   const dexEvents = await reconstructDexEvents(rootAddress, transfers, labels);
+  const liquidityEvents = await reconstructLiquidityEvents(rootAddress, transfers);
+  const liquidityPositions = trackLiquidityPositions(liquidityEvents);
   const normalizedRows = includeNormalizedRows ? transfers.map((t) => normalizeTransfer(t, rootAddress)) : null;
 
   const dexTransferRefs = new Map();
@@ -489,6 +572,10 @@ export async function analyzeEthereumWallet(address, { includeNormalizedRows = f
       dexTransferRefs.set(ref, event.refId);
     });
   });
+  const liquidityTransferRefs = new Map();
+  liquidityEvents.forEach((event) => {
+    event.sourceTransferRefs.forEach((ref) => liquidityTransferRefs.set(ref, event));
+  });
   const transactionRecords = new Map();
   for (const hash of new Set(transfers.map((transfer) => transfer.hash).filter(Boolean))) {
     transactionRecords.set(hash, await getTransaction(hash));
@@ -496,6 +583,25 @@ export async function analyzeEthereumWallet(address, { includeNormalizedRows = f
   const transferOutcomes = transfers.map((transfer) => {
     const normalized = withTransactionClassification(normalizeTransfer(transfer, rootAddress));
     const refId = transferRef(transfer);
+    if (liquidityTransferRefs.has(refId)) {
+      const event = liquidityTransferRefs.get(refId);
+      return {
+        refId,
+        txHash: transfer.hash,
+        type: "LIQUIDITY_EVENT_LEG",
+        status: "RECONSTRUCTED_LIQUIDITY_LEG",
+        complianceIncluded: false,
+        accountedFor: true,
+        fullyVerified: event.interpretationStatus === "VERIFIED_LIQUIDITY_EVENT",
+        reconstructedEventId: `${event.eventType}:${event.transactionHash}:${event.logIndex}`,
+        valuationStatus: "NOT_APPLICABLE",
+        reason: event.interpretationStatus === "VERIFIED_LIQUIDITY_EVENT"
+          ? "Raw transfer leg grouped into receipt-verified liquidity activity; excluded from DEX swap compliance rows."
+          : "Raw transfer leg grouped into incomplete liquidity evidence; excluded from DEX swap compliance rows.",
+        evidenceSources: ["Alchemy asset transfer", "Alchemy transaction receipt", "Decoded AMM liquidity event"],
+        classification: normalized.transactionClassification,
+      };
+    }
     if (dexTransferRefs.has(refId)) {
       const event = dexEvents.find((candidate) => candidate.refId === dexTransferRefs.get(refId));
       const valuationStatus = event?.valuationStatus || "UNAVAILABLE";
@@ -516,7 +622,12 @@ export async function analyzeEthereumWallet(address, { includeNormalizedRows = f
           : valuationStatus === "ESTIMATED_INR"
             ? "Raw transfer leg grouped into one reconstructed DEX economic event with estimated INR fair-market value only."
             : "Raw transfer leg grouped into one reconstructed DEX economic event.",
-        evidenceSources: ["Alchemy asset transfer", "Alchemy transaction receipt", "DEX router/selector"],
+        evidenceSources: [
+          "Alchemy asset transfer",
+          "Alchemy transaction receipt",
+          "DEX router/selector",
+          ...(event?.reconstruction?.verifiedByReceipt ? ["Decoded AMM receipt events"] : []),
+        ],
         classification: normalized.transactionClassification,
       };
     }
@@ -559,10 +670,15 @@ export async function analyzeEthereumWallet(address, { includeNormalizedRows = f
     const receipt = record?.receipt || null;
     const transaction = record?.transaction || null;
     const outcome = transferOutcomes.find((candidate) => candidate.refId === refId);
-    const gasUsed = receipt?.gasUsed ? BigInt(receipt.gasUsed) : null;
-    const gasPrice = transaction?.gasPrice ? BigInt(transaction.gasPrice) : null;
-    const gasFeeWei = gasUsed != null && gasPrice != null ? gasUsed * gasPrice : null;
-    const gasFeeEth = gasFeeWei == null ? null : Number(gasFeeWei) / 1e18;
+    const event = outcome?.reconstructedEventId
+      ? dexEvents.find((candidate) => candidate.refId === outcome.reconstructedEventId)
+      : null;
+    const liquidityEvent = outcome?.type === "LIQUIDITY_EVENT_LEG"
+      ? liquidityEvents.find((candidate) => candidate.sourceTransferRefs.includes(refId))
+      : null;
+    const ammFallback = event ? null : decodeReceiptAmmEvents(receipt?.logs, transfer.hash);
+    const decodedAmmEvents = event?.reconstruction?.decodedEvents ?? ammFallback?.decodedEvents ?? [];
+    const gasEvidence = buildGasEvidence(receipt, transaction, transfer.hash);
     const from = transfer.from || null;
     const to = transfer.to || null;
     return {
@@ -579,8 +695,8 @@ export async function analyzeEthereumWallet(address, { includeNormalizedRows = f
       to,
       direction: from?.toLowerCase() === rootAddress.toLowerCase() ? "OUT" : "IN",
       transactionCategory: transfer.category || null,
-      gasFeeWei: gasFeeWei == null ? null : gasFeeWei.toString(),
-      gasFeeEth: Number.isFinite(gasFeeEth) ? gasFeeEth : null,
+      gasFeeWei: gasEvidence.gasFeeWei,
+      gasFeeEth: gasEvidence.gasFeeEth,
       receiptStatus: receipt?.status || null,
       receiptLogCount: Array.isArray(receipt?.logs) ? receipt.logs.length : null,
       transactionInputSelector: transaction?.input ? transaction.input.slice(0, 10) : null,
@@ -591,6 +707,10 @@ export async function analyzeEthereumWallet(address, { includeNormalizedRows = f
       valuationStatus: outcome?.valuationStatus || "UNAVAILABLE",
       reason: outcome?.reason || "No outcome was produced.",
       evidenceSources: outcome?.evidenceSources || ["Alchemy asset transfer"],
+      poolAddress: event?.reconstruction?.poolAddress || ammFallback?.primaryPoolAddress || decodedAmmEvents[0]?.poolAddress || null,
+      receiptVerified: event ? (event.reconstruction?.verifiedByReceipt ?? false) : (ammFallback?.hasAmmSwap ?? decodedAmmEvents.some((e) => e.eventType === "Swap")),
+      decodedAmmEvents,
+      liquidityEvent,
     };
   });
   const outcomeCounts = Object.fromEntries(
@@ -605,6 +725,8 @@ export async function analyzeEthereumWallet(address, { includeNormalizedRows = f
     classifiedTransferCount: transferOutcomes.length,
     reconstructedEventCount: dexEvents.length,
     complianceRowCount: dexEvents.length,
+    liquidityEventCount: liquidityEvents.length,
+    liquidityPositionCount: liquidityPositions.length,
     excludedTransferCount: transferOutcomes.filter(
       (outcome) => !outcome.complianceIncluded && outcome.status !== "PENDING_MANUAL_REVIEW"
     ).length,
@@ -619,6 +741,7 @@ export async function analyzeEthereumWallet(address, { includeNormalizedRows = f
     outcomeCounts,
     transferOutcomes,
     inventory,
+    liquidityPositions,
   };
 
   const walletRows = normalizedRows || transfers.map((t) => normalizeTransfer(t, rootAddress));
@@ -660,7 +783,10 @@ export async function analyzeEthereumWallet(address, { includeNormalizedRows = f
     wallet: rootAddress,
     transferCount: transfers.length,
     derivedDexEventCount: dexEvents.length,
+    derivedLiquidityEventCount: liquidityEvents.length,
     derivedTransactions: dexEvents,
+    derivedLiquidityEvents: liquidityEvents,
+    derivedLiquidityPositions: liquidityPositions,
     traceability,
     ...(includeNormalizedRows ? { normalizedRows } : {}),
     provenance: {
