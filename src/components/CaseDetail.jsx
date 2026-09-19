@@ -3,7 +3,11 @@ import AIInsightsPanel from "./AIInsightsPanel";
 import DiscrepancyCard from "./DiscrepancyCard";
 import TransactionInvestigator from "./TransactionInvestigator";
 import TransactionFlowGraph from "./TransactionFlowGraph";
-import { buildDiscrepancyEvidence, buildTransactionEvidence } from "../utils/evidenceBuilder";
+import {
+  buildDiscrepancyEvidence,
+  buildCaseTransactionEvidence,
+  resolveCaseWalletAnalyses,
+} from "../utils/evidenceBuilder";
 import { isChainConfigured, verifyReportOnChain } from "../utils/blockchain";
 
 const STATUS_LABEL = {
@@ -23,6 +27,7 @@ export default function CaseDetail({ case_, readOnly = false, onApprove, onFlag 
   const [note, setNote] = useState(case_.reviewNote || "");
 
   const { reconciliation, discrepancies, insights, narrative, allRows } = case_;
+  const walletAnalyses = resolveCaseWalletAnalyses(case_);
 
   async function handleVerify() {
     setVerifyState("checking");
@@ -62,12 +67,17 @@ export default function CaseDetail({ case_, readOnly = false, onApprove, onFlag 
       {insights && (
         <AIInsightsPanel
           insights={insights}
-          reportContext={{ insights, discrepancies, reconciliation }}
+          reportContext={{ insights, discrepancies, reconciliation, walletAnalyses }}
         />
       )}
 
       <h3>Transaction flow graph</h3>
-      <TransactionFlowGraph allRows={allRows} reconciliation={reconciliation} discrepancies={discrepancies} />
+      <TransactionFlowGraph
+        allRows={allRows}
+        reconciliation={reconciliation}
+        discrepancies={discrepancies}
+        walletAnalyses={walletAnalyses}
+      />
 
       <h3>Trade summary</h3>
       <table className="data-table">
@@ -88,7 +98,7 @@ export default function CaseDetail({ case_, readOnly = false, onApprove, onFlag 
               <td>{s.asset}</td>
               <td>{s.tradeCount}</td>
               <td>{s.totalTraded.toFixed(4)}</td>
-              <td>₹{s.totalInr.toLocaleString("en-IN")}</td>
+              <td>{s.totalInr == null ? "Unavailable" : `₹${s.totalInr.toLocaleString("en-IN")}`}</td>
               <td>{s.tdsDeductedCount}/{s.tradeCount}</td>
             </tr>
           ))}
@@ -132,7 +142,7 @@ export default function CaseDetail({ case_, readOnly = false, onApprove, onFlag 
               <TransactionInvestigator
                 key={i}
                 flag={flag}
-                evidence={buildTransactionEvidence(flag, { reconciliation, allRows })}
+                evidence={buildCaseTransactionEvidence(case_, flag)}
               />
             ))}
           </ul>

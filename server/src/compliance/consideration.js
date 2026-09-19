@@ -61,15 +61,21 @@ export function determineConsideration(row, context = {}) {
 
   if (receivedAmount != null && receivedAssetFmvInr != null) {
     const inrValue = roundMoney(receivedAmount * receivedAssetFmvInr);
+    const valuationStatus = row.valuationStatus || "DETERMINED";
     return {
-      determined: true,
+      determined: valuationStatus === "VERIFIED_INR" || valuationStatus === "DETERMINED" || valuationStatus === "VALIDATED",
       inrValue,
       reportedInrValue,
-      valuationStatus: "DETERMINED",
+      valuationStatus,
       considerationType: "VDA_TO_VDA",
-      method: "received_vda_fmv",
+      method: valuationStatus === "ESTIMATED_INR"
+        ? "received_vda_estimated_fmv"
+        : "received_vda_fmv",
       source: "receivedAmount × receivedAssetFmvInrPerUnit",
       currency: "INR",
+      actualInrReceived: row.actualInrReceived ?? null,
+      estimatedInrValue: row.estimatedInrValue ?? (valuationStatus === "ESTIMATED_INR" ? inrValue : null),
+      valuationEvidence: row.valuationEvidence || null,
       valuationDifference:
         reportedInrValue == null ? null : roundMoney(reportedInrValue - inrValue),
       components: {
@@ -181,16 +187,40 @@ export function determineConsideration(row, context = {}) {
 
   // A reported INR value is retained for backwards compatibility, but it is
   // explicitly unverified when no independent valuation is available.
+  // Preserve caller-supplied ESTIMATED_INR / VERIFIED_INR / PENDING_VALUATION
+  // so estimated fair-market value is never rewritten as fabricated settlement.
   if (reportedInrValue != null) {
+    const preservedStatus = ["ESTIMATED_INR", "VERIFIED_INR", "PENDING_VALUATION"].includes(
+      row.valuationStatus
+    )
+      ? row.valuationStatus
+      : "UNVERIFIED";
     return {
-      determined: false,
-      inrValue: roundMoney(reportedInrValue),
+      determined: preservedStatus === "VERIFIED_INR",
+      inrValue: roundMoney(
+        preservedStatus === "VERIFIED_INR" && finiteNumber(row.actualInrReceived) != null
+          ? Number(row.actualInrReceived)
+          : reportedInrValue
+      ),
       reportedInrValue: roundMoney(reportedInrValue),
-      valuationStatus: "UNVERIFIED",
+      valuationStatus: preservedStatus,
       considerationType: "UNKNOWN",
-      method: "provided_inr_value_fallback",
-      source: "input inr_value",
+      method:
+        preservedStatus === "ESTIMATED_INR"
+          ? "estimated_inr_fair_market_value"
+          : preservedStatus === "VERIFIED_INR"
+            ? "verified_inr_settlement"
+            : "provided_inr_value_fallback",
+      source:
+        preservedStatus === "ESTIMATED_INR"
+          ? "historical FMV estimate (not INR settlement)"
+          : preservedStatus === "VERIFIED_INR"
+            ? "fiat settlement evidence"
+            : "input inr_value",
       currency: "INR",
+      actualInrReceived: row.actualInrReceived ?? null,
+      estimatedInrValue: row.estimatedInrValue ?? (preservedStatus === "ESTIMATED_INR" ? roundMoney(reportedInrValue) : null),
+      valuationEvidence: row.valuationEvidence || null,
       valuationDifference: 0,
       components: { suppliedInrValue: roundMoney(reportedInrValue) },
     };
@@ -200,11 +230,16 @@ export function determineConsideration(row, context = {}) {
     determined: false,
     inrValue: null,
     reportedInrValue: null,
-    valuationStatus: "UNRESOLVED",
+    valuationStatus: ["PENDING_VALUATION", "ESTIMATED_INR", "VERIFIED_INR"].includes(row.valuationStatus)
+      ? row.valuationStatus
+      : "UNRESOLVED",
     considerationType: "UNKNOWN",
     method: "undetermined",
     source: "insufficient transaction valuation fields",
     currency: "INR",
+    actualInrReceived: row.actualInrReceived ?? null,
+    estimatedInrValue: row.estimatedInrValue ?? null,
+    valuationEvidence: row.valuationEvidence || null,
     valuationDifference: null,
     components: {},
   };

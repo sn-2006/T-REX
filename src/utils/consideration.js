@@ -67,11 +67,14 @@ export function determineConsideration(row, context = {}) {
       determined: true,
       inrValue,
       reportedInrValue: finiteNumber(row.inrValue ?? row.inr_value),
-      valuationStatus: "DETERMINED",
+      valuationStatus: row.valuationStatus || "DETERMINED",
       considerationType: "VDA_TO_VDA",
       method: "received_vda_fmv",
       source: "receivedAmount × receivedAssetFmvInrPerUnit",
       currency: "INR",
+      actualInrReceived: row.actualInrReceived ?? null,
+      estimatedInrValue: row.estimatedInrValue ?? inrValue,
+      valuationEvidence: row.valuationEvidence || null,
       components: {
         receivedAsset: row.receivedAsset || row.received_asset || null,
         receivedAmount,
@@ -184,7 +187,9 @@ export function determineConsideration(row, context = {}) {
     determined: false,
     inrValue: null,
     reportedInrValue: null,
-    valuationStatus: "UNRESOLVED",
+    valuationStatus: row.valuationStatus === "PENDING_VALUATION"
+      ? "PENDING_VALUATION"
+      : "UNRESOLVED",
     considerationType: "UNKNOWN",
     method: "undetermined",
     source: "insufficient transaction valuation fields",

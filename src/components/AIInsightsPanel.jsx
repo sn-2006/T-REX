@@ -41,11 +41,16 @@ export default function AIInsightsPanel({ insights, reportContext }) {
         <div className="ai-stat"><div className="ai-stat-value">{insights.probableTransfers}</div><div className="ai-stat-label">Probable transfers</div></div>
         <div className="ai-stat"><div className="ai-stat-value">{insights.unmatchedTransactions}</div><div className="ai-stat-label">Unmatched transactions</div></div>
         <div className="ai-stat"><div className="ai-stat-value">{insights.tdsDiscrepancyCount}</div><div className="ai-stat-label">TDS discrepancies</div></div>
+        <div className="ai-stat"><div className="ai-stat-value">{insights.reviewRequiredCount}</div><div className="ai-stat-label">Pending review</div></div>
         <div className="ai-stat ai-stat-risk"><div className="ai-stat-value">{insights.highRiskCount}</div><div className="ai-stat-label">High-risk transactions</div></div>
       </div>
 
       <div className="ai-confidence-line">
-        {insights.walletOnly ? "On-chain provenance confidence" : "Overall compliance confidence"}: <strong>{insights.overallConfidence}%</strong>
+        {insights.walletOnly ? "On-chain provenance confidence" : "Overall compliance confidence"}
+        {" "}(heuristic): <strong>{insights.overallConfidence}%</strong>
+        {insights.confidenceLimitations && (
+          <div className="muted small">{insights.confidenceLimitations}</div>
+        )}
       </div>
 
       <div className="ai-chat">

@@ -32,7 +32,12 @@ export function reconcile(allRows) {
     const s = summaryMap[key];
     s.tradeCount += 1;
     s.totalTraded += t.amount;
-    s.totalInr += (t.consideration?.inrValue ?? t.inrValue);
+    const inrValue = t.consideration?.inrValue ?? t.inrValue;
+    if (s.totalInr != null) {
+      s.totalInr = inrValue == null || !Number.isFinite(Number(inrValue))
+        ? null
+        : s.totalInr + Number(inrValue);
+    }
     if (t.tdsStatus === "DEDUCTED") s.tdsDeductedCount += 1;
   }
   const tradeSummary = Object.values(summaryMap);
@@ -122,6 +127,18 @@ export function reconcile(allRows) {
       refId: t.refId,
     });
   }
+  if (["UNRESOLVED", "PENDING_VALUATION", "ESTIMATED_INR"].includes(t.consideration?.valuationStatus)) {
+    warnings.push({
+      type: t.consideration?.valuationStatus === "ESTIMATED_INR"
+        ? "VALUATION_ESTIMATED"
+        : "VALUATION_UNRESOLVED",
+      message:
+        t.consideration?.valuationStatus === "ESTIMATED_INR"
+          ? `${t.refId} on ${t.exchange} has estimated INR fair-market value but no verified INR settlement evidence — manual verification is required before compliance can be finalized.`
+          : `${t.refId} on ${t.exchange} has no independently determined INR consideration — manual INR valuation verification is required before compliance can be finalized.`,
+      refId: t.refId,
+    });
+  }
 }
 
   // 4. Unmatched deposits — the mirror image of orphaned withdrawals: money
@@ -138,4 +155,191 @@ export function reconcile(allRows) {
     }));
 
   return { tradeSummary, transferChecks, warnings, unmatchedDeposits };
+}
+
+/**
+ * Merge wallet/on-chain pending-review and estimated-value evidence into the
+ * same warnings channel used by the dashboard, investigation queue, and AI.
+ * Does not invent matches — only surfaces unresolved inventory outcomes.
+ * Attaches available inventory fields (asset, date, hash, direction, from/to)
+ * when present; missing fields stay null.
+ */
+export function withWalletReconciliationFlags(reconciliation, walletAnalyses = []) {
+  const base = reconciliation || {
+    tradeSummary: [],
+    transferChecks: [],
+    warnings: [],
+    unmatchedDeposits: [],
+  };
+  const list = Array.isArray(walletAnalyses)
+    ? walletAnalyses.filter(Boolean)
+    : Object.values(walletAnalyses || {}).filter(Boolean);
+
+  const warnings = [...(base.warnings || [])];
+  const seen = new Set(warnings.map((w) => `${w.type}:${w.refId}`));
+
+  for (const analysis of list) {
+    const inventoryByRef = new Map(
+      (analysis?.traceability?.inventory || []).map((item) => [item.rawTransferId, item])
+    );
+    const outcomes = analysis?.traceability?.transferOutcomes || [];
+    for (const outcome of outcomes) {
+      if (outcome.status !== "PENDING_MANUAL_REVIEW") continue;
+      const key = `PENDING_MANUAL_REVIEW:${outcome.refId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const inventory = inventoryByRef.get(outcome.refId) || null;
+      warnings.push({
+        type: "PENDING_MANUAL_REVIEW",
+        refId: outcome.refId,
+        message:
+          `${outcome.refId}: on-chain transfer requires manual review — ` +
+          `${outcome.reason || "ownership or taxable disposition could not be established."}`,
+        asset: inventory?.asset ?? null,
+        amount: inventory?.amount ?? null,
+        date: inventory?.timestamp ?? null,
+        txHash: inventory?.txHash ?? null,
+        direction: inventory?.direction ?? null,
+        from: inventory?.from ?? null,
+        to: inventory?.to ?? null,
+        reason: outcome.reason || inventory?.reason || null,
+        evidenceSources: outcome.evidenceSources || inventory?.evidenceSources || null,
+      });
+    }
+  }
+
+  const walletPendingReviewCount = list.reduce(
+    (sum, analysis) => sum + (Number(analysis?.traceability?.pendingReviewCount) || 0),
+    0
+  );
+  const walletEstimatedValueCount = list.reduce(
+    (sum, analysis) => sum + (Number(analysis?.traceability?.estimatedValueRecordCount) || 0),
+    0
+  );
+  const walletVerifiedCount = list.reduce(
+    (sum, analysis) => sum + (Number(analysis?.traceability?.verifiedRecordCount) || 0),
+    0
+  );
+
+  return {
+    ...base,
+    warnings,
+    walletPendingReviewCount,
+    walletEstimatedValueCount,
+    walletVerifiedCount,
+    hasUnresolvedItems:
+      warnings.length > 0 ||
+      (base.unmatchedDeposits || []).length > 0 ||
+      walletPendingReviewCount > 0,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Decentralized wallet reconciliation.
+//
+// Wallet-only analysis is different from exchange-ledger reconciliation.
+// A blockchain transfer proves that VDA moved, but by itself does not prove
+// that the movement was a taxable disposition or provide INR consideration.
+//
+// This function therefore:
+//   1. Reconciles observable wallet movements.
+//   2. Separates incoming/outgoing movements.
+//   3. Flags ownership-unknown movements for manual verification.
+//   4. Does NOT invent INR consideration or TDS.
+//
+// Taxable TDS is calculated only when a later valuation/disposition layer
+// provides sufficient evidence.
+// ---------------------------------------------------------------------------
+
+export function reconcileWallet(walletRows = []) {
+  const rows = Array.isArray(walletRows) ? walletRows : [];
+
+  const incoming = rows.filter((r) => r.type === "DEPOSIT");
+  const outgoing = rows.filter((r) => r.type === "WITHDRAWAL");
+
+  const manualVerification = rows
+    .filter((r) => {
+      const classification = r.transactionClassification;
+
+      return (
+        classification?.status === "UNDETERMINED" ||
+        classification?.transferType === "VDA_MOVEMENT_OWNERSHIP_UNKNOWN"
+      );
+    })
+    .map((r) => ({
+      type: "OWNERSHIP_UNKNOWN",
+      refId: r.refId,
+      date: r.date,
+      asset: r.asset,
+      amount: r.amount,
+      direction: r.type === "DEPOSIT" ? "IN" : "OUT",
+      message:
+        `${r.amount} ${r.asset} ${r.type === "DEPOSIT" ? "received" : "sent"} ` +
+        `by the wallet, but source/destination ownership could not be established ` +
+        `from the available on-chain data.`,
+    }));
+
+  const assetSummaryMap = {};
+
+  for (const row of rows) {
+    const key = row.asset || "UNKNOWN";
+
+    if (!assetSummaryMap[key]) {
+      assetSummaryMap[key] = {
+        asset: key,
+        incomingAmount: 0,
+        outgoingAmount: 0,
+        transactionCount: 0,
+      };
+    }
+
+    const summary = assetSummaryMap[key];
+    summary.transactionCount += 1;
+
+    if (row.type === "DEPOSIT") {
+      summary.incomingAmount += Number(row.amount) || 0;
+    }
+
+    if (row.type === "WITHDRAWAL") {
+      summary.outgoingAmount += Number(row.amount) || 0;
+    }
+  }
+
+  const assetSummary = Object.values(assetSummaryMap).map((item) => ({
+    ...item,
+    incomingAmount: Number(item.incomingAmount.toFixed(12)),
+    outgoingAmount: Number(item.outgoingAmount.toFixed(12)),
+  }));
+
+  return {
+    mode: "DECENTRALIZED_WALLET",
+
+    transactionCount: rows.length,
+
+    incomingCount: incoming.length,
+    outgoingCount: outgoing.length,
+
+    taxableTransactionCount: rows.filter(
+      (r) => r.transactionClassification?.isVdaTransfer === true
+    ).length,
+
+    manualVerificationCount: manualVerification.length,
+
+    expectedTds: 0,
+    reportedTds: 0,
+    tdsGap: 0,
+
+    tdsStatus: "NOT_DETERMINED",
+
+    reason:
+      rows.length === 0
+        ? "No observable on-chain wallet transactions were found."
+        : manualVerification.length > 0
+        ? "Wallet movements were observed, but ownership or taxable disposition could not be established for all movements."
+        : "Wallet movements were observed. Taxable disposition and INR consideration require sufficient on-chain valuation evidence.",
+
+    assetSummary,
+
+    manualVerification,
+  };
 }

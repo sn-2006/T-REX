@@ -17,7 +17,10 @@ export function computeAllTdsRows(allRows) {
 
   return eligibleTransfers.map((t) => {
     const consideration = t.consideration || {
-      inrValue: Number.isFinite(Number(t.inrValue)) ? Number(t.inrValue) : null,
+      inrValue:
+        t.inrValue == null || !Number.isFinite(Number(t.inrValue))
+          ? null
+          : Number(t.inrValue),
       determined: false,
       method: "legacy_row_without_consideration",
       considerationType: "UNKNOWN",
@@ -33,19 +36,26 @@ export function computeAllTdsRows(allRows) {
 
     let reportedTds;
     let reportedSource;
+    const decentralizedDerived = t.transactionSource === "DECENTRALIZED_DEX";
     if (typeof t.tdsAmount === "number" && !Number.isNaN(t.tdsAmount)) {
       reportedTds = t.tdsAmount;
       reportedSource = "tds_amount column";
     } else if (expectedTds != null && t.tdsStatus === "DEDUCTED") {
       reportedTds = expectedTds;
       reportedSource = "tds_status=DEDUCTED (assumed full amount, no tds_amount column provided)";
+    } else if (decentralizedDerived && t.tdsStatus === "NOT_REPORTED") {
+      reportedTds = null;
+      reportedSource = "no reported TDS record in on-chain data";
+    } else if (expectedTds == null || t.tdsStatus == null || t.tdsStatus === "NOT_REPORTED" || t.tdsStatus === "PENDING") {
+      reportedTds = null;
+      reportedSource = "expected or reported TDS evidence unavailable";
     } else {
       reportedTds = 0;
       reportedSource = `tds_status=${t.tdsStatus}`;
     }
 
     const difference =
-      expectedTds == null
+      expectedTds == null || reportedTds == null
         ? null
         : Math.round((expectedTds - reportedTds) * 100) / 100;
 
@@ -54,6 +64,14 @@ export function computeAllTdsRows(allRows) {
       consideration.valuationStatus === "MISMATCH" &&
       valuationDifference != null &&
       Math.abs(valuationDifference) > 0.5;
+    const status =
+      expectedTds == null || reportedTds == null
+        ? "REVIEW_REQUIRED"
+        : hasValuationDiscrepancy
+          ? "VALUATION_MISMATCH"
+          : difference != null && Math.abs(difference) > 0.5
+            ? "TDS_MISMATCH"
+            : "MATCHED";
 
     let riskTier = "low";
     if (expectedTds != null && expectedTds > 0) {
@@ -87,6 +105,8 @@ export function computeAllTdsRows(allRows) {
       reportedTds,
       reportedSource,
       difference,
+      status,
+      reviewRequired: status === "REVIEW_REQUIRED",
       hasTdsDiscrepancy: difference != null && Math.abs(difference) > 0.5,
       hasValuationDiscrepancy,
       hasDiscrepancy:

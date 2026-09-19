@@ -22,6 +22,26 @@ export default function TransactionInvestigator({ flag, evidence }) {
   return (
     <li className="investigator-row">
       <div className="investigator-message">{flag.message}</div>
+      {["VALUATION_UNRESOLVED", "VALUATION_ESTIMATED"].includes(evidence.status) && (
+        <div className="muted small">
+          Valuation status: {evidence.valuationStatus} · Actual INR received: {evidence.actualInrReceived == null ? "Unavailable" : `₹${evidence.actualInrReceived.toLocaleString("en-IN")}`} · Estimated INR: {evidence.estimatedInrValue == null ? "Unavailable" : `₹${evidence.estimatedInrValue.toLocaleString("en-IN")}`}
+        </div>
+      )}
+      {evidence.status === "PENDING_MANUAL_REVIEW" && (
+        <div className="muted small">
+          {[
+            evidence.asset != null ? `Asset: ${evidence.asset}` : null,
+            evidence.quantity != null ? `Amount: ${evidence.quantity}` : null,
+            evidence.direction != null ? `Direction: ${evidence.direction}` : null,
+            evidence.date != null ? `Date: ${evidence.date}` : null,
+            evidence.txHash != null ? `Tx: ${evidence.txHash}` : null,
+            evidence.from != null ? `From: ${evidence.from}` : null,
+            evidence.to != null ? `To: ${evidence.to}` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ") || "On-chain identifiers unavailable for this transfer."}
+        </div>
+      )}
 
       {!result && (
         <button className="link-btn" onClick={handleInvestigate} disabled={loading}>

@@ -79,7 +79,7 @@ export function buildReportPdf({
       s.asset,
       s.tradeCount,
       s.totalTraded.toFixed(4),
-      s.totalInr.toLocaleString("en-IN"),
+      s.totalInr == null ? "Unavailable" : s.totalInr.toLocaleString("en-IN"),
       `${s.tdsDeductedCount}/${s.tradeCount}`,
     ]),
     styles: {
