@@ -5,21 +5,41 @@ const REGIONS = ["North", "South", "East", "West", "Central", "North-East"];
 
 const COPY = {
   taxpayer: {
-    title: "Taxpayer login",
-    blurb: "Sign in with your PAN to upload exchange statements and reconcile TDS.",
+    number: "01",
+    roleName: "TAXPAYER",
+    title: "TAXPAYER ACCESS",
+    blurb: "Sign in with your PAN to upload exchange statements, reconcile Section 194S TDS, and anchor reports.",
     hint: 'Demo: any PAN + name + region + email + a password of 4+ characters, e.g. PAN "ABCDE1234F".',
   },
   auditor: {
-    title: "Auditor login",
-    blurb: "Sign in with your auditor ID to review assigned taxpayer cases.",
+    number: "02",
+    roleName: "AUDITOR",
+    title: "AUDITOR ACCESS",
+    blurb: "Sign in with your verified Auditor ID to review assigned taxpayer compliance cases.",
     hint: "Demo auditor IDs: AUD001 or AUD002 · password: auditor123",
   },
   regulator: {
-    title: "Government regulator login",
-    blurb: "Sign in for read-only compliance analytics across all taxpayers.",
+    number: "03",
+    roleName: "REGULATOR",
+    title: "REGULATOR ACCESS",
+    blurb: "Sign in for read-only sovereign compliance analytics, regional metrics, and exchange monitoring.",
     hint: "Demo regulator ID: REG001 · password: regulator123",
   },
 };
+
+function Arrow({ className = "" }) {
+  return (
+    <svg className={className} viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M3 10h13M10.5 4.5 16 10l-5.5 5.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
 export default function LoginPage({ role, onLoggedIn }) {
   const copy = COPY[role];
@@ -50,9 +70,6 @@ export default function LoginPage({ role, onLoggedIn }) {
       }
       onLoggedIn(session);
     } catch (e) {
-      // A wrong password (or any other login failure) must never let the
-      // person through — surface it both inline and as an alert so it
-      // can't be missed, and leave them on the login screen.
       setError(e.message);
       window.alert(e.message);
     } finally {
@@ -62,99 +79,166 @@ export default function LoginPage({ role, onLoggedIn }) {
 
   if (!copy) {
     return (
-      <section className="card">
-        <h1>Unknown login</h1>
-        <a className="link-btn" href="#/">Back to role selection</a>
-      </section>
+      <div className="login-page-wrap">
+        <header className="login-nav">
+          <button className="brand" onClick={() => (window.location.hash = "#/")}>
+            <span className="brand-mark">T</span>
+            <span>T-REX</span>
+          </button>
+          <a className="login-back-link" href="#/">
+            ← BACK TO HOME
+          </a>
+        </header>
+        <section className="card login-card">
+          <h1>Unknown login portal</h1>
+          <p className="muted">Please choose a valid role to access T-REX.</p>
+          <a className="primary-btn" href="#/">
+            RETURN TO LANDING PAGE <Arrow />
+          </a>
+        </section>
+      </div>
     );
   }
 
   return (
-    <section className="card login-card">
-      <h1>{copy.title}</h1>
-      <p className="muted">{copy.blurb}</p>
-
-      <form className="login-form" onSubmit={handleSubmit}>
-        {role === "taxpayer" ? (
-          <>
-            <label className="wallet-label">
-              Full name
-              <input
-                className="name-input"
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Rohit Sharma"
-              />
-            </label>
-            <label className="wallet-label">
-              PAN
-              <input
-                className="name-input"
-                type="text"
-                value={pan}
-                onChange={(e) => setPan(e.target.value)}
-                placeholder="ABCDE1234F"
-              />
-            </label>
-            <label className="field-label">
-              Region
-              <select value={region} onChange={(e) => setRegion(e.target.value)}>
-                <option value="">Select your region</option>
-                {REGIONS.map((r) => (
-                  <option key={r} value={r}>{r}</option>
-                ))}
-              </select>
-            </label>
-            <label className="wallet-label">
-              Email
-              <input
-                className="name-input"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
-              />
-            </label>
-            <p className="muted small">
-              Only needed the first time you sign in with this PAN — region is how the
-              regulator dashboard groups taxpayers, and email is what you'll verify next
-              before you can generate a report.
-            </p>
-          </>
-        ) : (
-          <label className="wallet-label">
-            {role === "auditor" ? "Auditor ID" : "Regulator ID"}
-            <input
-              className="name-input"
-              type="text"
-              value={id}
-              onChange={(e) => setId(e.target.value)}
-              placeholder={role === "auditor" ? "AUD001" : "REG001"}
-            />
-          </label>
-        )}
-
-        <label className="wallet-label">
-          Password
-          <input
-            className="name-input"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="••••••••"
-          />
-        </label>
-
-        {error && <div className="error">{error}</div>}
-
-        <button className="primary-btn" type="submit" disabled={submitting}>
-          {submitting ? "Signing in..." : "Sign in"}
+    <div className="login-page-wrap">
+      <header className="login-nav">
+        <button className="brand" onClick={() => (window.location.hash = "#/")}>
+          <span className="brand-mark">T</span>
+          <span>T-REX</span>
         </button>
-      </form>
+        <a className="login-back-link" href="#/">
+          ← RETURN TO HOME
+        </a>
+      </header>
 
-      <p className="muted small login-hint">{copy.hint}</p>
-      <a className="link-btn" href="#/">← Back to role selection</a>
-    </section>
+      <main className="login-main">
+        <div className="login-container">
+          <div className="section-tag">
+            <span>{copy.number}</span>
+            <span>PORTAL AUTHENTICATION</span>
+          </div>
+
+          <h1 className="login-heading">
+            {copy.roleName}.
+            <br />
+            <em>PORTAL.</em>
+          </h1>
+          <p className="login-blurb">{copy.blurb}</p>
+
+          <form className="login-form-box" onSubmit={handleSubmit}>
+            {role === "taxpayer" ? (
+              <>
+                <div className="input-group">
+                  <label className="mono-label">FULL NAME</label>
+                  <input
+                    className="mono-input"
+                    type="text"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="Rohit Sharma"
+                    required
+                  />
+                </div>
+
+                <div className="input-group">
+                  <label className="mono-label">PERMANENT ACCOUNT NUMBER (PAN)</label>
+                  <input
+                    className="mono-input"
+                    type="text"
+                    value={pan}
+                    onChange={(e) => setPan(e.target.value.toUpperCase())}
+                    placeholder="ABCDE1234F"
+                    required
+                  />
+                </div>
+
+                <div className="input-group">
+                  <label className="mono-label">TAX REGION / JURISDICTION</label>
+                  <select
+                    className="mono-input mono-select"
+                    value={region}
+                    onChange={(e) => setRegion(e.target.value)}
+                    required
+                  >
+                    <option value="">Select your registered region</option>
+                    {REGIONS.map((r) => (
+                      <option key={r} value={r}>
+                        {r} Region
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="input-group">
+                  <label className="mono-label">OFFICIAL EMAIL ADDRESS</label>
+                  <input
+                    className="mono-input"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="taxpayer@domain.com"
+                    required
+                  />
+                </div>
+
+                <span className="micro-help">
+                  First-time PAN registration will automatically initialize your decentralized compliance account.
+                </span>
+              </>
+            ) : (
+              <div className="input-group">
+                <label className="mono-label">
+                  {role === "auditor" ? "AUTHORIZED AUDITOR ID" : "GOVERNMENT REGULATOR ID"}
+                </label>
+                <input
+                  className="mono-input"
+                  type="text"
+                  value={id}
+                  onChange={(e) => setId(e.target.value.toUpperCase())}
+                  placeholder={role === "auditor" ? "AUD001" : "REG001"}
+                  required
+                />
+              </div>
+            )}
+
+            <div className="input-group">
+              <label className="mono-label">ACCESS PASSWORD</label>
+              <input
+                className="mono-input"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••••••"
+                required
+              />
+            </div>
+
+            {error && (
+              <div className="login-error-box">
+                <span className="error-indicator">!</span>
+                <span>{error}</span>
+              </div>
+            )}
+
+            <button className="primary-btn login-submit-btn" type="submit" disabled={submitting}>
+              {submitting ? "AUTHENTICATING..." : "ENTER PORTAL"} <Arrow />
+            </button>
+          </form>
+
+          <div className="login-hint-strip">
+            <div className="hint-label">SANDBOX CREDENTIALS</div>
+            <div className="hint-content">{copy.hint}</div>
+          </div>
+
+          <div className="role-switch-row">
+            <span className="switch-label">SWITCH PORTAL:</span>
+            {role !== "taxpayer" && <a href="#/login/taxpayer">Taxpayer Portal</a>}
+            {role !== "auditor" && <a href="#/login/auditor">Auditor Portal</a>}
+            {role !== "regulator" && <a href="#/login/regulator">Regulator Portal</a>}
+          </div>
+        </div>
+      </main>
+    </div>
   );
 }

@@ -14,31 +14,21 @@ import complianceRoutes from "./routes/compliance.js";
 
 const app = express();
 
-const allowedOrigins = (process.env.CORS_ORIGIN || "")
-  .split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean);
-
+// Enable CORS for all origins in development (automatically reflects request origin)
 app.use(
   cors({
-    origin(origin, callback) {
-      if (!origin) return callback(null, true);
-
-      if (
-        allowedOrigins.length === 0 ||
-        allowedOrigins.includes(origin)
-      ) {
-        return callback(null, true);
-      }
-
-      return callback(new Error("CORS origin not allowed."));
-    },
+    origin: true,
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
   })
 );
+app.options("*", cors());
+
 
 app.use(express.json({ limit: "50mb" }));
 
-const API_PREFIX = process.env.VERCEL ? "" : "/api";
+const API_PREFIX = "/api";
 
 app.get(`${API_PREFIX}/health`, (req, res) => {
   res.json({ ok: true });
