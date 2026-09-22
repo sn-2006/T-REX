@@ -6,6 +6,7 @@ const router = Router();
 router.post("/ask", requireAuth, async (req, res) => {
   const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
   const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "llama3.2:3b";
+  const OLLAMA_API_KEY = process.env.OLLAMA_API_KEY || "";
   const { systemPrompt, userPrompt } = req.body;
 
   if (!systemPrompt || !userPrompt) {
@@ -19,6 +20,7 @@ router.post("/ask", requireAuth, async (req, res) => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        ...(OLLAMA_API_KEY ? { Authorization: `Bearer ${OLLAMA_API_KEY}` } : {}),
       },
       body: JSON.stringify({
         model: OLLAMA_MODEL,

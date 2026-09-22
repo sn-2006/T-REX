@@ -26,20 +26,9 @@ export default function App() {
 
   function handleLoggedIn(newSession) {
     setSession(newSession);
-    window.location.hash = DASHBOARD_ROUTE[newSession.role];
+    window.location.hash = DASHBOARD_ROUTE[newSession.role] || "#/";
   }
 
-  // Fully signs out and returns to the role-selection landing page.
-  //
-  // This updates `route` directly rather than only setting
-  // `window.location.hash` and waiting for the async `hashchange` event:
-  // the hash event doesn't fire until after this render commits, so for
-  // one render `route` would still be the old dashboard path (e.g.
-  // "#/taxpayer") while `session` is already null — which the router
-  // below reads as "logged out, but was viewing a dashboard" and sends to
-  // that role's login screen instead of the landing page. Setting both
-  // React states together in the same handler keeps them in sync on the
-  // very first re-render, so logout always lands on "#/".
   function handleLogout() {
     logout();
     setSession(null);
@@ -47,10 +36,14 @@ export default function App() {
     window.location.hash = "#/";
   }
 
-  // Public verification page — no session required, routes each report's
-  // QR code / verify link to a real page rather than a placeholder.
+  // Public verification page — no session required
   if (route.startsWith("#/verify/")) {
-    return <VerifyPage hash={route.replace("#/verify/", "")} />;
+    return (
+      <div className="site">
+        <div className="grain" />
+        <VerifyPage hash={route.replace("#/verify/", "")} />
+      </div>
+    );
   }
 
   if (route.startsWith("#/login/")) {
@@ -60,7 +53,8 @@ export default function App() {
       return null;
     }
     return (
-      <div className="app">
+      <div className="site">
+        <div className="grain" />
         <LoginPage role={role} onLoggedIn={handleLoggedIn} />
       </div>
     );
@@ -68,34 +62,41 @@ export default function App() {
 
   if (route === "#/taxpayer") {
     if (!session || session.role !== "taxpayer") return <RedirectToLogin role="taxpayer" />;
-    return <TaxpayerDashboard session={session} onLogout={handleLogout} />;
+    return (
+      <div className="site">
+        <div className="grain" />
+        <TaxpayerDashboard session={session} onLogout={handleLogout} />
+      </div>
+    );
   }
 
   if (route === "#/auditor") {
     if (!session || session.role !== "auditor") return <RedirectToLogin role="auditor" />;
-    return <AuditorDashboard session={session} onLogout={handleLogout} />;
+    return (
+      <div className="site">
+        <div className="grain" />
+        <AuditorDashboard session={session} onLogout={handleLogout} />
+      </div>
+    );
   }
 
   if (route === "#/regulator") {
     if (!session || session.role !== "regulator") return <RedirectToLogin role="regulator" />;
-    return <RegulatorDashboard session={session} onLogout={handleLogout} />;
+    return (
+      <div className="site">
+        <div className="grain" />
+        <RegulatorDashboard session={session} onLogout={handleLogout} />
+      </div>
+    );
   }
 
-  // Default: role-selection landing page. If already signed in, send the
-  // person straight to their dashboard instead of asking them to pick again.
-  if (session) {
-    window.location.hash = DASHBOARD_ROUTE[session.role];
-    return null;
-  }
-
+  // Default: Full Landing Page.
+  // The landing page is visible first. The user can explore all sections
+  // and click "Get Started" or select a portal to open their dashboard or login.
   return (
-    <div className="app">
-      <header className="app-header">
-        <div className="brand">T-REX</div>
-      </header>
-      <main className="app-main">
-        <LandingPage />
-      </main>
+    <div className="site">
+      <div className="grain" />
+      <LandingPage />
     </div>
   );
 }

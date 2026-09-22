@@ -9,3 +9,5 @@ blockchain/.env
 *.log
 *.dump
 .DS_Store
+.vercel
+.env*

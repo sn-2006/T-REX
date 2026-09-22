@@ -545,7 +545,7 @@ export default function TaxpayerDashboard({ session, onLogout }) {
   }
 
   return (
-    <div className="app">
+    <div className="app app-wide">
       {processing ? (
         <LoadingScreen />
       ) : (
