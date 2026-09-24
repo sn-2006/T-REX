@@ -11,6 +11,10 @@ import verifyRoutes from "./routes/verify.js";
 import aiRoutes from "./routes/ai.js";
 import verificationRoutes from "./routes/verification.js";
 import complianceRoutes from "./routes/compliance.js";
+import auditorsRouter from "./routes/auditors.js";
+import auditorRequestsRouter from "./routes/auditorRequests.js";
+import auditorRequestActionsRouter from "./routes/auditorRequestActions.js";
+import conversationsRouter from "./routes/conversations.js";
 
 const app = express();
 
@@ -42,6 +46,10 @@ app.use(`${API_PREFIX}/verification`, verificationRoutes);
 app.use(`${API_PREFIX}/compliance`, complianceRoutes);
 app.use(`${API_PREFIX}/binance`, binanceRoutes);
 app.use(`${API_PREFIX}/wallet`, walletRoutes);
+app.use(`${API_PREFIX}/auditors`, auditorsRouter);
+app.use(`${API_PREFIX}/auditor-requests`, auditorRequestsRouter);
+app.use(`${API_PREFIX}/auditor-requests`, auditorRequestActionsRouter);
+app.use(`${API_PREFIX}/conversations`, conversationsRouter);
 
 app.use((err, req, res, next) => {
   console.error("SERVER ERROR:", err);
