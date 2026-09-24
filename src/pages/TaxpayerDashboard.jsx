@@ -247,33 +247,19 @@ export default function TaxpayerDashboard({ session, onLogout }) {
 
     if (walletAddresses.length > 0) {
       try {
-        walletResults = await Promise.all(
-          wallets
-            .filter((w) => w.address.trim())
-            .map(async (w) => {
-              const existing = walletAnalyses[w.id];
-
-              if (
-                existing &&
-                existing.wallet.toLowerCase() ===
-                  w.address.trim().toLowerCase()
-              ) {
-                return {
-                  id: w.id,
-                  analysis: existing,
-                };
-              }
-
-              const analysis = await fetchWalletAnalysis(
-                w.address.trim()
-              );
-
-              return {
-                id: w.id,
-                analysis,
-              };
-            })
-        );
+        const filteredWallets = wallets.filter((w) => w.address.trim());
+        for (const w of filteredWallets) {
+          const existing = walletAnalyses[w.id];
+          if (
+            existing &&
+            existing.wallet.toLowerCase() === w.address.trim().toLowerCase()
+          ) {
+            walletResults.push({ id: w.id, analysis: existing });
+            continue;
+          }
+          const analysis = await fetchWalletAnalysis(w.address.trim());
+          walletResults.push({ id: w.id, analysis });
+        }
 
         // Keep wallet analyses in React state for the wallet UI.
         setWalletAnalyses((state) => {
@@ -439,23 +425,31 @@ export default function TaxpayerDashboard({ session, onLogout }) {
 
     try {
       const hash = await sha256Hex({
+        allRows: allTransactionRows,
         reconciliation,
         narrative,
-        generatedAt: Date.now(),
+        discrepancies,
+        insights,
       });
 
       setReportHash(hash);
 
-      const anchorResult = isChainConfigured
-        ? await anchorReportOnChain(hash)
-        : mockAnchorOnChain(hash);
+      const existingLocalRecord = localStorage.getItem(`chaintds_report_${hash}`);
+      const existingAnchor = existingLocalRecord ? JSON.parse(existingLocalRecord) : null;
+      const anchorResult = existingAnchor
+        ? existingAnchor
+        : isChainConfigured
+          ? await anchorReportOnChain(hash)
+          : mockAnchorOnChain(hash);
 
       setAnchor(anchorResult);
 
-      localStorage.setItem(
-        `chaintds_report_${hash}`,
-        JSON.stringify({ ...anchorResult, reportHash: hash })
-      );
+      if (!existingAnchor) {
+        localStorage.setItem(
+          `chaintds_report_${hash}`,
+          JSON.stringify({ ...anchorResult, reportHash: hash })
+        );
+      }
 
       // Register this report as a case for the Auditor / Regulator dashboards.
       // The blockchain anchor is already durable at this point, so a database
@@ -500,7 +494,11 @@ export default function TaxpayerDashboard({ session, onLogout }) {
       const verifyUrl = `${window.location.origin}${window.location.pathname}#/verify/${hash}`;
       const qr = await QRCode.toDataURL(verifyUrl, { margin: 1, width: 220 });
       setQrDataUrl(qr);
-      setError(caseSaveError);
+      setError(
+        existingAnchor
+          ? `This report's hash was already generated: ${hash}`
+          : caseSaveError
+      );
       setStep("report");
     } catch (e) {
       console.error(e);
@@ -1115,49 +1113,6 @@ export default function TaxpayerDashboard({ session, onLogout }) {
                     ))}
                   </ul>
                 )}
-
-                {(reconciliation.warnings.length > 0 ||
-                  reconciliation.unmatchedDeposits.length > 0) && (
-                  <>
-                    <h3>Investigate flagged transactions</h3>
-                    <ul className="investigator-list">
-                      {[...reconciliation.warnings, ...reconciliation.unmatchedDeposits].map(
-                        (flag, i) => (
-                          <TransactionInvestigator
-                            key={i}
-                            flag={flag}
-                            evidence={buildTransactionEvidence(flag, {
-                              reconciliation,
-                              allRows: allTransactionRows,
-                              walletAnalyses,
-                            })}
-                          />
-                        )
-                      )}
-                    </ul>
-                  </>
-                )}
-
-                {discrepancies.filter((d) => d.hasTdsDiscrepancy === true).length > 0 && (
-  <>
-    <h3>TDS discrepancies</h3>
-    <div className="discrepancy-list">
-      {discrepancies
-        .filter((d) => d.hasTdsDiscrepancy === true)
-        .map((d, i) => (
-          <DiscrepancyCard
-            key={i}
-            discrepancy={d}
-            evidence={buildDiscrepancyEvidence(d, {
-              reconciliation,
-              allRows: allTransactionRows,
-            })}
-          />
-        ))}
-    </div>
-  </>
-)}
-
                 <h3>AI-generated summary</h3>
                 <pre className="narrative">{narrative}</pre>
 

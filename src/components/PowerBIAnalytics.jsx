@@ -1,5 +1,22 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { computeAllTdsRows } from "../utils/tdsDiscrepancy";
+import { explainDiscrepancy, investigateTransaction } from "../services/complianceAssistant";
+import { buildDiscrepancyEvidence, buildTransactionEvidence } from "../utils/evidenceBuilder";
+import {
+  BarChart as RechartsBarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  LineChart as RechartsLineChart,
+  Line
+} from "recharts";
 
 const TYPE_LABELS = {
   TDS_MISMATCH: "TDS mismatch",
@@ -31,6 +48,12 @@ function groupBy(rows, key) {
 
 export default function PowerBIAnalytics({ allRows = [], discrepancies = [], reconciliation = null, walletAnalyses = {}, cases = [], role = "taxpayer" }) {
   const [selected, setSelected] = useState(null);
+  const [explanation, setExplanation] = useState(null);
+  const [loadingExplanation, setLoadingExplanation] = useState(false);
+
+  useEffect(() => {
+    setExplanation(null);
+  }, [selected]);
 
   const data = useMemo(() => {
     if (role === "taxpayer") return buildTaxpayerData(allRows, discrepancies, reconciliation, walletAnalyses);
@@ -39,6 +62,32 @@ export default function PowerBIAnalytics({ allRows = [], discrepancies = [], rec
 
   const investigationQueue = data.investigationQueue || discrepancies;
   const selectedDiscrepancy = selected != null ? investigationQueue[selected] : null;
+
+  async function handleExplain() {
+    if (!selectedDiscrepancy) return;
+    setLoadingExplanation(true);
+    try {
+      const isOriginalDiscrepancy = selected < discrepancies.length;
+      let evidence;
+      let r;
+
+      if (isOriginalDiscrepancy) {
+        evidence = buildDiscrepancyEvidence(selectedDiscrepancy, { reconciliation, allRows });
+        r = await explainDiscrepancy(evidence);
+      } else {
+        const flag = { type: selectedDiscrepancy.type, refId: selectedDiscrepancy.transactionId };
+        evidence = buildTransactionEvidence(flag, { reconciliation, allRows, walletAnalyses });
+        r = await investigateTransaction(evidence);
+        // Normalize response to match explainDiscrepancy
+        if (r.investigation) {
+          r.explanation = r.investigation;
+        }
+      }
+      setExplanation(r);
+    } finally {
+      setLoadingExplanation(false);
+    }
+  }
 
   return (
     <section className="pbi-shell">
@@ -130,10 +179,43 @@ export default function PowerBIAnalytics({ allRows = [], discrepancies = [], rec
             <span>Reported <strong>{money(selectedDiscrepancy.reportedTds)}</strong></span>
             <span>Gap <strong>{money(selectedDiscrepancy.difference == null ? null : Math.abs(selectedDiscrepancy.difference))}</strong></span>
           </div>
-          <div className="pbi-investigation-actions">
-            <button className="primary-btn" onClick={() => document.getElementById(`trex-discrepancy-${selectedDiscrepancy.transactionId}`)?.scrollIntoView({ behavior: "smooth", block: "center" })}>INVESTIGATE</button>
-            <button className="secondary-btn" onClick={() => document.getElementById(`trex-discrepancy-${selectedDiscrepancy.transactionId}`)?.scrollIntoView({ behavior: "smooth", block: "center" })}>EXPLAIN WITH AI</button>
+          <div className="pbi-investigation-actions" style={{ display: 'flex', gap: '12px' }}>
+            {!explanation && !loadingExplanation && (
+              <button className="primary-btn" onClick={handleExplain} style={{ width: '220px', padding: '8px 16px' }}>
+                INVESTIGATE WITH AI
+              </button>
+            )}
           </div>
+          {loadingExplanation && (
+            <div style={{ gridColumn: '1 / -1', marginTop: '16px', display: 'flex', alignItems: 'center', gap: '12px', padding: '16px', backgroundColor: 'rgba(124, 151, 116, 0.1)', borderRadius: '8px' }}>
+              <style>{`
+                @keyframes pbi-run {
+                  0% { transform: translateX(-10px) scaleX(1); }
+                  49% { transform: translateX(10px) scaleX(1); }
+                  50% { transform: translateX(10px) scaleX(-1); }
+                  99% { transform: translateX(-10px) scaleX(-1); }
+                  100% { transform: translateX(-10px) scaleX(1); }
+                }
+              `}</style>
+              <div style={{ width: '40px', display: 'flex', justifyContent: 'center' }}>
+                <span style={{ fontSize: '28px', animation: 'pbi-run 1.5s linear infinite', display: 'inline-block' }}>🦖</span>
+              </div>
+              <span className="muted" style={{ fontWeight: 500 }}>T-REX is analyzing the data...</span>
+            </div>
+          )}
+          {explanation && (
+            <div className="ai-explanation" style={{ gridColumn: '1 / -1', marginTop: '16px', padding: '16px', backgroundColor: 'rgba(124, 151, 116, 0.15)', borderRadius: '8px', border: '1px solid rgba(124, 151, 116, 0.4)', color: '#eaeaea' }}>
+              <div className="ai-explanation-text" style={{ whiteSpace: 'pre-wrap', lineHeight: '1.6', fontSize: '14px' }}>{explanation.explanation}</div>
+              <details className="audit-trail" style={{ marginTop: '12px', fontSize: '13px' }}>
+                <summary>Evidence used</summary>
+                <ul>
+                  {explanation.evidenceUsed.map((e, i) => (
+                    <li key={i}>✓ {e}</li>
+                  ))}
+                </ul>
+              </details>
+            </div>
+          )}
         </div>
       )}
     </section>
@@ -145,35 +227,104 @@ function ChartCard({ title, subtitle, children }) {
 }
 
 function BarChart({ data, dual = false, suffix = "", max }) {
-  const maxValue = max || Math.max(1, ...data.flatMap((d) => dual ? [d.expected, d.reported] : [d.value]));
-  return <div className="pbi-bars">
-    {data.length === 0 && <div className="pbi-empty">No data available.</div>}
-    {data.slice(0, 8).map((d) => <div className="pbi-bar-row" key={d.label}>
-      <div className="pbi-bar-label" title={d.label}>{d.label}</div>
-      <div className="pbi-bar-track">
-        {dual ? <><span className="pbi-bar expected" style={{ width: `${Math.max(2, (d.expected / maxValue) * 100)}%` }} /><span className="pbi-bar reported" style={{ width: `${Math.max(2, (d.reported / maxValue) * 100)}%` }} /></> : <span className="pbi-bar" style={{ width: `${Math.max(2, (d.value / maxValue) * 100)}%` }} />}
-      </div>
-      <strong>{dual ? `${money(d.expected)} / ${money(d.reported)}` : d.value == null ? "Unavailable" : `${d.value}${suffix}`}</strong>
-    </div>)}
-    {dual && <div className="pbi-legend"><span><i className="legend-expected" /> Expected</span><span><i className="legend-reported" /> Reported</span></div>}
-  </div>;
+  if (data.length === 0) return <div className="pbi-empty">No data available.</div>;
+  
+  return (
+    <div style={{ width: '100%', height: 250 }}>
+      <ResponsiveContainer>
+        <RechartsBarChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }} barGap={2}>
+          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#333" />
+          <XAxis dataKey="label" stroke="#888" tick={{ fill: '#888', fontSize: 12 }} axisLine={false} tickLine={false} />
+          <YAxis stroke="#888" tick={{ fill: '#888', fontSize: 12 }} axisLine={false} tickLine={false} tickFormatter={(val) => suffix ? `${val}${suffix}` : val} />
+          <Tooltip 
+            cursor={{ fill: '#222' }}
+            contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '4px' }}
+            formatter={(value, name) => {
+              if (dual) return [money(value), name === 'expected' ? 'Expected' : 'Reported'];
+              return [suffix ? `${value}${suffix}` : value, 'Value'];
+            }}
+          />
+          {dual && <Legend verticalAlign="top" height={36} iconType="circle" wrapperStyle={{ fontSize: '12px' }} />}
+          {dual ? (
+            <>
+              <Bar dataKey="expected" fill="#7C9774" maxBarSize={60} radius={[2, 2, 0, 0]} name="Expected" />
+              <Bar dataKey="reported" fill="#ffffff" maxBarSize={60} radius={[2, 2, 0, 0]} name="Reported" />
+            </>
+          ) : (
+            <Bar dataKey="value" fill="#7C9774" maxBarSize={60} radius={[2, 2, 0, 0]} name="Value" />
+          )}
+        </RechartsBarChart>
+      </ResponsiveContainer>
+    </div>
+  );
 }
+
+const COLORS = ["#7C9774", "#9bb991", "#4f6349", "#d4e0d1", "#2c3b28"];
 
 function DonutChart({ data, onSelect }) {
   const total = data.reduce((s, d) => s + d.value, 0);
-  let cursor = 0;
-  const segments = data.map((d) => { const start = total ? (cursor / total) * 360 : 0; cursor += d.value; return `${d.label} ${start}deg ${(cursor / Math.max(1, total)) * 360}deg`; });
-  const gradient = data.length ? `conic-gradient(${segments.map((s, i) => `${i % 2 ? "#000000" : "#7C9774"} ${s.split(" ").slice(1).join(" ")}`).join(", ")})` : "#e9ece8";
-  return <div className="pbi-donut-layout">
-    <div className="pbi-donut" style={{ background: gradient }}><div><strong>{total}</strong><span>Total</span></div></div>
-    <div className="pbi-donut-legend">{data.map((d, i) => <button key={d.label} onClick={() => onSelect?.(d.label)}><i style={{ background: i % 2 ? "#000000" : "#7C9774" }} /> <span>{d.label}</span><strong>{d.value}</strong></button>)}</div>
-  </div>;
+  if (data.length === 0) return <div className="pbi-empty">No data available.</div>;
+
+  return (
+    <div style={{ width: '100%', height: 250, display: 'flex', alignItems: 'center', position: 'relative' }}>
+      <div style={{ width: '60%', height: '100%', position: 'relative' }}>
+        <ResponsiveContainer>
+          <PieChart>
+            <Pie
+              data={data}
+              innerRadius="60%"
+              outerRadius="80%"
+              paddingAngle={2}
+              dataKey="value"
+              onClick={(entry) => onSelect?.(entry.label)}
+              stroke="none"
+            >
+              {data.map((entry, index) => (
+                <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} style={{ cursor: 'pointer', outline: 'none' }} />
+              ))}
+            </Pie>
+            <Tooltip 
+              contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '4px' }}
+            />
+          </PieChart>
+        </ResponsiveContainer>
+        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+          <strong style={{ fontSize: '24px', lineHeight: 1, color: '#fff' }}>{total}</strong>
+          <span style={{ fontSize: '10px', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total</span>
+        </div>
+      </div>
+      <div style={{ width: '40%', maxHeight: '200px', overflowY: 'auto' }} className="pbi-donut-legend">
+        {data.map((d, i) => (
+          <button key={d.label} onClick={() => onSelect?.(d.label)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', padding: '4px 0', background: 'none', border: 'none', color: '#fff', cursor: 'pointer', textAlign: 'left' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
+              <i style={{ background: COLORS[i % COLORS.length], width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0 }} />
+              <span style={{ fontSize: '12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.label}</span>
+            </div>
+            <strong style={{ fontSize: '12px', marginLeft: '8px' }}>{d.value}</strong>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function LineChart({ data }) {
-  const max = Math.max(1, ...data.map((d) => d.value));
-  const points = data.map((d, i) => `${data.length === 1 ? 50 : (i / (data.length - 1)) * 100},${88 - (d.value / max) * 72}`).join(" ");
-  return <div className="pbi-line-wrap"><svg viewBox="0 0 100 100" preserveAspectRatio="none" className="pbi-line-svg"><polyline points={points} fill="none" stroke="#7C9774" strokeWidth="2.5" vectorEffect="non-scaling-stroke" /></svg><div className="pbi-line-labels">{data.map((d) => <span key={d.label}>{d.label}</span>)}</div></div>;
+  if (data.length === 0) return <div className="pbi-empty">No data available.</div>;
+  return (
+    <div style={{ width: '100%', height: 250 }}>
+      <ResponsiveContainer>
+        <RechartsLineChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#333" />
+          <XAxis dataKey="label" stroke="#888" tick={{ fill: '#888', fontSize: 12 }} axisLine={false} tickLine={false} />
+          <YAxis stroke="#888" tick={{ fill: '#888', fontSize: 12 }} axisLine={false} tickLine={false} />
+          <Tooltip 
+            contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '4px' }}
+          />
+          <Line type="monotone" dataKey="value" stroke="#7C9774" strokeWidth={3} dot={{ fill: '#7C9774', r: 4 }} activeDot={{ r: 6 }} />
+        </RechartsLineChart>
+      </ResponsiveContainer>
+    </div>
+  );
 }
 
 function buildTaxpayerData(
