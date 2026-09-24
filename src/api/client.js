@@ -2,7 +2,7 @@
 // JWT issued at login, and normalizes error handling so callers just
 // `await apiFetch(...)` and catch a single Error type.
 
-const BASE_URL = import.meta.env?.VITE_API_BASE_URL || "http://localhost:4000/api";
+const BASE_URL = import.meta.env?.VITE_API_BASE_URL || "/api";
 const TOKEN_KEY = "chaintds_token_v1";
 
 export function getToken() {

@@ -1,7 +1,26 @@
-// Produces a SHA-256 hex digest of any JS object, used to fingerprint the
-// generated report before it's anchored on-chain.
+function canonicalize(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map(canonicalize)
+      .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  }
+
+  if (value && typeof value === "object") {
+    return Object.keys(value)
+      .sort()
+      .reduce((result, key) => {
+        result[key] = canonicalize(value[key]);
+        return result;
+      }, {});
+  }
+
+  return value;
+}
+
+// Produces a SHA-256 hex digest of a canonical representation so equivalent
+// report data has the same digest regardless of property or array ordering.
 export async function sha256Hex(obj) {
-  const text = typeof obj === "string" ? obj : JSON.stringify(obj);
+  const text = typeof obj === "string" ? obj : JSON.stringify(canonicalize(obj));
   const enc = new TextEncoder().encode(text);
   const digest = await crypto.subtle.digest("SHA-256", enc);
   return Array.from(new Uint8Array(digest))
