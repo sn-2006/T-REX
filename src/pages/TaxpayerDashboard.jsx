@@ -579,6 +579,34 @@ export default function TaxpayerDashboard({ session, onLogout }) {
               </nav>
             )}
           </DashboardHeader>
+          <section className="auditor-assistance-card">
+  <div>
+    <h2>Auditor Assistance</h2>
+    <p>
+      Connect with a registered auditor for help with your tax reconciliation.
+    </p>
+  </div>
+
+  <div className="auditor-assistance-actions">
+    <button
+      type="button"
+      onClick={() => {
+        window.location.hash = "#/taxpayer/auditors";
+      }}
+    >
+      Find an Auditor
+    </button>
+
+    <button
+      type="button"
+      onClick={() => {
+        window.location.hash = "#/taxpayer/auditor-requests";
+      }}
+    >
+      My Requests
+    </button>
+  </div>
+</section>
 
           <main className="app-main">
             {!verifyStatus ? (
