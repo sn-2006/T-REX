@@ -439,23 +439,31 @@ export default function TaxpayerDashboard({ session, onLogout }) {
 
     try {
       const hash = await sha256Hex({
+        allRows: allTransactionRows,
         reconciliation,
         narrative,
-        generatedAt: Date.now(),
+        discrepancies,
+        insights,
       });
 
       setReportHash(hash);
 
-      const anchorResult = isChainConfigured
-        ? await anchorReportOnChain(hash)
-        : mockAnchorOnChain(hash);
+      const existingLocalRecord = localStorage.getItem(`chaintds_report_${hash}`);
+      const existingAnchor = existingLocalRecord ? JSON.parse(existingLocalRecord) : null;
+      const anchorResult = existingAnchor
+        ? existingAnchor
+        : isChainConfigured
+          ? await anchorReportOnChain(hash)
+          : mockAnchorOnChain(hash);
 
       setAnchor(anchorResult);
 
-      localStorage.setItem(
-        `chaintds_report_${hash}`,
-        JSON.stringify({ ...anchorResult, reportHash: hash })
-      );
+      if (!existingAnchor) {
+        localStorage.setItem(
+          `chaintds_report_${hash}`,
+          JSON.stringify({ ...anchorResult, reportHash: hash })
+        );
+      }
 
       // Register this report as a case for the Auditor / Regulator dashboards.
       // The blockchain anchor is already durable at this point, so a database
@@ -500,7 +508,11 @@ export default function TaxpayerDashboard({ session, onLogout }) {
       const verifyUrl = `${window.location.origin}${window.location.pathname}#/verify/${hash}`;
       const qr = await QRCode.toDataURL(verifyUrl, { margin: 1, width: 220 });
       setQrDataUrl(qr);
-      setError(caseSaveError);
+      setError(
+        existingAnchor
+          ? `This report's hash was already generated: ${hash}`
+          : caseSaveError
+      );
       setStep("report");
     } catch (e) {
       console.error(e);
