@@ -44,14 +44,80 @@ export default function TransactionFlowGraph({ allRows, reconciliation, discrepa
   }
 
   return (
-    <div className="flow-graph-wrap">
+    <div className="flow-graph-wrap" style={{
+      position: 'relative',
+      backgroundColor: '#1b1d22',
+      backgroundImage: 'linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px)',
+      backgroundSize: '20px 20px',
+      borderRadius: '8px',
+      border: '1px solid #333',
+      color: '#fff',
+      padding: '20px'
+    }}>
+      <style>{`
+        .flow-graph-svg {
+          width: 100%;
+          height: auto;
+          display: block;
+        }
+        .flow-node { fill: #1b1d22; stroke: #8bb390; stroke-width: 2; }
+        .flow-node-virtual { fill: #1b1d22; stroke: #e2543a; }
+        
+        .flow-node-label {
+          fill: #fff;
+          font-size: 11px;
+        }
+        
+        .flow-edge {
+          fill: none;
+          stroke-width: 1.6;
+        }
+        .flow-edge-active { stroke-width: 2.6; }
+        
+        .flow-edge-ok { stroke: #8bb390; }
+        .flow-edge-gap { stroke: #ff976a; }
+        .flow-edge-unknown { stroke: #e2543a; }
+        .flow-edge-discrepancy { stroke: #d9822b; }
+        
+        .flow-edge-label {
+          fill: #8b93a7;
+          font-size: 10px;
+        }
+        .flow-edge-label-active { fill: #fff; }
+        
+        .flow-legend {
+          display: flex;
+          gap: 18px;
+          flex-wrap: wrap;
+          margin-top: 8px;
+          font-size: 12px;
+          color: #8b93a7;
+        }
+        
+        .flow-legend span {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+        }
+        
+        .flow-dot {
+          display: inline-block;
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+        }
+        .flow-dot-ok { background: #8bb390; }
+        .flow-dot-gap { background: #ff976a; }
+        .flow-dot-discrepancy { background: #d9822b; }
+        .flow-dot-unknown { background: #e2543a; }
+      `}</style>
       <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="flow-graph-svg">
         <defs>
           <marker id="flow-arrow-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)" />
+            <path d="M0,0 L10,5 L0,10 z" fill="#8bb390" />
           </marker>
           <marker id="flow-arrow-gap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M0,0 L10,5 L0,10 z" fill="var(--danger)" />
+            <path d="M0,0 L10,5 L0,10 z" fill="#ff976a" />
           </marker>
           <marker id="flow-arrow-unknown" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M0,0 L10,5 L0,10 z" fill="#e2543a" />

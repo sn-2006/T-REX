@@ -63,45 +63,63 @@ export default function DiscrepancyCard({ discrepancy, evidence }) {
           {expanded ? "Hide details" : "Investigate"}
         </button>
         {!result && (
-          <button className="primary-btn discrepancy-ai-btn" onClick={handleExplain} disabled={loading}>
-            {loading ? "Thinking..." : "Explain with AI"}
+          <button className="primary-btn discrepancy-ai-btn" onClick={handleExplain} disabled={loading} style={{ minWidth: '160px' }}>
+            {loading ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <style>{`
+                  @keyframes pbi-run {
+                    0% { transform: translateX(-10px) scaleX(1); }
+                    49% { transform: translateX(10px) scaleX(1); }
+                    50% { transform: translateX(10px) scaleX(-1); }
+                    99% { transform: translateX(-10px) scaleX(-1); }
+                    100% { transform: translateX(-10px) scaleX(1); }
+                  }
+                `}</style>
+                <div style={{ width: '30px', display: 'flex', justifyContent: 'center' }}>
+                  <span style={{ fontSize: '18px', animation: 'pbi-run 1.5s linear infinite', display: 'inline-block' }}>🦖</span>
+                </div>
+                <span>ANALYZING...</span>
+              </div>
+            ) : (
+              "Explain with AI"
+            )}
           </button>
         )}
       </div>
 
       {expanded && (
-        <div className="discrepancy-detail-panel">
-          <div><span>Transaction</span><strong>{discrepancy.transactionId}</strong></div>
-          <div><span>VDA transfer</span><strong>{discrepancy.vdaTransferStatus === "CONFIRMED" ? "Confirmed" : "Undetermined"}</strong></div>
-          <div><span>Transfer type</span><strong>{discrepancy.transferType || "—"}</strong></div>
-          <div><span>Transfer confidence</span><strong>{discrepancy.transferConfidence ?? 0}%</strong></div>
-          <div><span>Consideration method</span><strong>{discrepancy.consideration?.method || "—"}</strong></div>
-          <div><span>Consideration source</span><strong>{discrepancy.consideration?.source || "—"}</strong></div>
-          <div><span>Consideration status</span><strong>{discrepancy.consideration?.valuationStatus || "—"}</strong></div>
-          <div><span>Reported consideration</span><strong>
+        <div className="discrepancy-detail-panel" style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '16px', padding: '16px', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#888' }}>Transaction</span><strong>{discrepancy.transactionId}</strong></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#888' }}>VDA transfer</span><strong>{discrepancy.vdaTransferStatus === "CONFIRMED" ? "Confirmed" : "Undetermined"}</strong></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#888' }}>Transfer type</span><strong>{discrepancy.transferType || "—"}</strong></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#888' }}>Transfer confidence</span><strong>{discrepancy.transferConfidence ?? 0}%</strong></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#888' }}>Consideration method</span><strong>{discrepancy.consideration?.method || "—"}</strong></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#888' }}>Consideration source</span><strong>{discrepancy.consideration?.source || "—"}</strong></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#888' }}>Consideration status</span><strong>{discrepancy.consideration?.valuationStatus || "—"}</strong></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#888' }}>Reported consideration</span><strong>
             {discrepancy.consideration?.reportedInrValue == null
               ? "Missing"
               : `₹${discrepancy.consideration.reportedInrValue.toLocaleString("en-IN")}`}
           </strong></div>
-          <div><span>Determined consideration</span><strong>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#888' }}>Determined consideration</span><strong>
             {discrepancy.inrValue == null ? "Unresolved" : `₹${discrepancy.inrValue.toLocaleString("en-IN")}`}
           </strong></div>
           {valuationDifference != null && (
-            <div><span>Valuation difference</span><strong>₹{Math.abs(valuationDifference).toLocaleString("en-IN")}</strong></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#888' }}>Valuation difference</span><strong>₹{Math.abs(valuationDifference).toLocaleString("en-IN")}</strong></div>
           )}
-          <div><span>Expected TDS</span><strong>{expectedValue}</strong></div>
-          <div><span>Reported TDS</span><strong>{reportedValue}</strong></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#888' }}>Expected TDS</span><strong>{expectedValue}</strong></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#888' }}>Reported TDS</span><strong>{reportedValue}</strong></div>
           {discrepancy.difference != null && (
-            <div><span>TDS gap</span><strong>₹{Math.abs(discrepancy.difference).toLocaleString("en-IN")}</strong></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#888' }}>TDS gap</span><strong>₹{Math.abs(discrepancy.difference).toLocaleString("en-IN")}</strong></div>
           )}
-          <div><span>Reported source</span><strong>{discrepancy.reportedSource || "—"}</strong></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#888' }}>Reported source</span><strong>{discrepancy.reportedSource || "—"}</strong></div>
         </div>
       )}
 
       {result && (
-        <div className="ai-explanation">
-          <div className="ai-explanation-text">{result.explanation}</div>
-          <details className="audit-trail">
+        <div className="ai-explanation" style={{ marginTop: '16px', padding: '16px', backgroundColor: 'rgba(124, 151, 116, 0.15)', borderRadius: '8px', border: '1px solid rgba(124, 151, 116, 0.4)', color: '#eaeaea' }}>
+          <div className="ai-explanation-text" style={{ whiteSpace: 'pre-wrap', lineHeight: '1.6', fontSize: '14px' }}>{result.explanation}</div>
+          <details className="audit-trail" style={{ marginTop: '12px', fontSize: '13px' }}>
             <summary>Evidence used</summary>
             <ul>
               {result.evidenceUsed.map((e, i) => (

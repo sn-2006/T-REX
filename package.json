@@ -10,20 +10,21 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "ethers": "^6.17.0",
-    "jspdf": "^4.2.1",
-    "jspdf-autotable": "^5.0.8",
-    "papaparse": "^5.5.4",
-    "qrcode": "^1.5.4",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
+    "ethers": "^6.17.0",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
     "nodemailer": "^6.9.14",
-    "pg": "^8.12.0"
+    "papaparse": "^5.5.4",
+    "pg": "^8.12.0",
+    "qrcode": "^1.5.4",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "recharts": "^3.10.1"
   },
   "devDependencies": {
     "@types/react": "^19.2.17",
