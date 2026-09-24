@@ -143,3 +143,51 @@ CREATE INDEX idx_transactions_case ON transactions(case_id);
 
 -- Example, if/when you need to query inside the JSONB later:
 -- CREATE INDEX idx_cases_reconciliation_gin ON cases USING GIN (reconciliation);
+-- Auditor request and private conversation workflow
+-- Safe to run repeatedly.
+
+CREATE TABLE IF NOT EXISTS auditor_requests (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  taxpayer_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  auditor_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'Pending'
+    CHECK (status IN ('Pending', 'Accepted', 'Rejected')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_auditor_requests_taxpayer
+  ON auditor_requests(taxpayer_id);
+
+CREATE INDEX IF NOT EXISTS idx_auditor_requests_auditor
+  ON auditor_requests(auditor_id);
+
+CREATE TABLE IF NOT EXISTS auditor_relationships (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  taxpayer_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  auditor_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  request_id UUID NOT NULL UNIQUE
+    REFERENCES auditor_requests(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (taxpayer_id, auditor_id)
+);
+
+CREATE TABLE IF NOT EXISTS conversations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  relationship_id UUID NOT NULL UNIQUE
+    REFERENCES auditor_relationships(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversation_id UUID NOT NULL
+    REFERENCES conversations(id) ON DELETE CASCADE,
+  sender_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  message TEXT NOT NULL CHECK (length(trim(message)) > 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_conversation
+  ON messages(conversation_id, created_at);
