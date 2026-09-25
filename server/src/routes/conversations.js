@@ -1,11 +1,49 @@
 import { Router } from "express";
 import { pool } from "../db.js";
-import { requireAuth } from "../middleware/auth.js";
+import { requireAuth, requireRole } from "../middleware/auth.js";
 
 const router = Router();
 
 // GET /api/conversations/:id/messages
 // Only participants in the conversation can view messages.
+
+router.get(
+  "/my",
+  requireAuth,
+  requireRole("taxpayer"),
+  async (req, res) => {
+    try {
+      const result = await pool.query(
+        `SELECT c.id AS conversation_id,
+                ar.id AS relationship_id,
+                u.id AS auditor_id,
+                u.name AS auditor_name
+         FROM conversations c
+         JOIN auditor_relationships ar
+           ON ar.id = c.relationship_id
+         JOIN users u
+           ON u.id = ar.auditor_id
+         WHERE ar.taxpayer_id = $1
+         ORDER BY c.created_at DESC`,
+        [req.user.id]
+      );
+
+      return res.json(
+        result.rows.map((row) => ({
+          conversationId: row.conversation_id,
+          relationshipId: row.relationship_id,
+          auditorId: row.auditor_id,
+          auditorName: row.auditor_name,
+        }))
+      );
+    } catch (err) {
+      console.error("Fetch taxpayer conversations error:", err);
+      return res.status(500).json({
+        error: "Couldn't load your conversations.",
+      });
+    }
+  }
+);
 router.get("/:id/messages", requireAuth, async (req, res) => {
   try {
     const result = await pool.query(

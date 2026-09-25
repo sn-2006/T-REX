@@ -3,9 +3,14 @@ import VerifyPage from "./VerifyPage";
 import LandingPage from "./pages/LandingPage";
 import LoginPage from "./pages/LoginPage";
 import TaxpayerDashboard from "./pages/TaxpayerDashboard";
+import AuditorDirectory from "./pages/taxpayer/AuditorDirectory";
+import AuditorProfile from "./pages/taxpayer/AuditorProfile";
+import MyAuditorRequests from "./pages/taxpayer/MyAuditorRequests";
+import TaxpayerConversation from "./pages/taxpayer/TaxpayerConversation";
 import AuditorDashboard from "./pages/AuditorDashboard";
 import RegulatorDashboard from "./pages/RegulatorDashboard";
 import { getSession, logout } from "./auth/auth";
+import AuditorConversation from "./pages/AuditorConversation";
 import "./App.css";
 
 const DASHBOARD_ROUTE = {
@@ -60,7 +65,114 @@ export default function App() {
     );
   }
 
+  if (route === "#/taxpayer/conversations") {
+  if (!session || session.role !== "taxpayer") {
+    return <RedirectToLogin role="taxpayer" />;
+  }
+
+  return (
+    <div className="site">
+      <div className="grain" />
+      <TaxpayerConversation />
+    </div>
+  );
+}
+
+if (route === "#/taxpayer/auditors") {
+  if (!session || session.role !== "taxpayer") {
+    return <RedirectToLogin role="taxpayer" />;
+  }
+
+  return (
+    <div className="site">
+      <div className="grain" />
+      <AuditorDirectory />
+    </div>
+  );
+}
+
+if (route.startsWith("#/taxpayer/auditors/")) {
+  if (!session || session.role !== "taxpayer") {
+    return <RedirectToLogin role="taxpayer" />;
+  }
+
+  const auditorId = route.replace("#/taxpayer/auditors/", "");
+
+  return (
+    <div className="site">
+      <div className="grain" />
+      <AuditorProfile auditorId={auditorId} />
+    </div>
+  );
+}
+
+if (route === "#/taxpayer/auditor-requests") {
+  if (!session || session.role !== "taxpayer") {
+    return <RedirectToLogin role="taxpayer" />;
+  }
+
+  return (
+    <div className="site">
+      <div className="grain" />
+      <MyAuditorRequests />
+    </div>
+  );
+}
+
+if (route === "#/taxpayer/conversations") {
+  if (!session || session.role !== "taxpayer") {
+    return <RedirectToLogin role="taxpayer" />;
+  }
+
+  return (
+    <div className="site">
+      <div className="grain" />
+      <TaxpayerConversation />
+    </div>
+  );
+}
+
   if (route === "#/taxpayer") {
+    if (route === "#/taxpayer/auditors") {
+  if (!session || session.role !== "taxpayer") {
+    return <RedirectToLogin role="taxpayer" />;
+  }
+
+  return (
+    <div className="site">
+      <div className="grain" />
+      <AuditorDirectory session={session} />
+    </div>
+  );
+}
+
+if (route.startsWith("#/taxpayer/auditors/")) {
+  if (!session || session.role !== "taxpayer") {
+    return <RedirectToLogin role="taxpayer" />;
+  }
+
+  const auditorId = route.replace("#/taxpayer/auditors/", "");
+
+  return (
+    <div className="site">
+      <div className="grain" />
+      <AuditorProfile auditorId={auditorId} />
+    </div>
+  );
+}
+
+if (route === "#/taxpayer/auditor-requests") {
+  if (!session || session.role !== "taxpayer") {
+    return <RedirectToLogin role="taxpayer" />;
+  }
+
+  return (
+    <div className="site">
+      <div className="grain" />
+      <MyAuditorRequests />
+    </div>
+  );
+}
     if (!session || session.role !== "taxpayer") return <RedirectToLogin role="taxpayer" />;
     return (
       <div className="site">
@@ -68,6 +180,26 @@ export default function App() {
         <TaxpayerDashboard session={session} onLogout={handleLogout} />
       </div>
     );
+  }
+
+  if (route.startsWith("#/auditor/conversations/")) {
+  if (!session || session.role !== "auditor") {
+    return <RedirectToLogin role="auditor" />;
+  }
+
+  const conversationId = route.replace(
+    "#/auditor/conversations/",
+    ""
+  );
+
+  return (
+    <div className="site">
+      <div className="grain" />
+      <AuditorConversation
+        conversationId={conversationId}
+      />
+    </div>
+  );
   }
 
   if (route === "#/auditor") {
