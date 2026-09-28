@@ -1,10 +1,11 @@
-import jsPDF from "jspdf";
+import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 
 export function buildReportPdf({
   tradeSummary,
   transferChecks,
   warnings,
+  tdsRows = [],
   narrative,
   reportHash,
   anchor,
@@ -127,6 +128,43 @@ export function buildReportPdf({
   });
 
   y = doc.lastAutoTable.finalY + 10;
+
+  if (tdsRows.length > 0) {
+    addHeading("Section 194S TDS");
+
+    autoTable(doc, {
+      startY: y,
+      head: [[
+        "Date",
+        "Exchange",
+        "Asset",
+        "Consideration",
+        "Threshold",
+        "Threshold Status",
+        "Expected TDS",
+        "Reported TDS",
+      ]],
+      body: tdsRows.map((row) => [
+        row.date || "Unavailable",
+        row.exchange || "Unavailable",
+        row.asset || "Unavailable",
+        row.inrValue == null ? "Unresolved" : row.inrValue.toLocaleString("en-IN"),
+        row.threshold_amount == null ? "Unavailable" : row.threshold_amount.toLocaleString("en-IN"),
+        row.threshold_status || "REVIEW_REQUIRED",
+        row.expectedTds == null ? "Unresolved" : row.expectedTds.toLocaleString("en-IN"),
+        row.reportedTds == null ? "Unavailable" : row.reportedTds.toLocaleString("en-IN"),
+      ]),
+      styles: {
+        fontSize: 7,
+      },
+      margin: {
+        left: 14,
+        right: 14,
+      },
+    });
+
+    y = doc.lastAutoTable.finalY + 10;
+  }
 
   // -------------------------------------------------------------------------
   // AI / Compliance Summary

@@ -109,6 +109,19 @@ export default function DiscrepancyCard({ discrepancy, evidence }) {
           )}
           <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#888' }}>Expected TDS</span><strong>{expectedValue}</strong></div>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#888' }}>Reported TDS</span><strong>{reportedValue}</strong></div>
+          {discrepancy.threshold_status && (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#888' }}>194S threshold status</span><strong>{discrepancy.threshold_status}</strong></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#888' }}>Applicable threshold</span><strong>
+                {discrepancy.threshold_amount == null
+                  ? "Unresolved"
+                  : `₹${discrepancy.threshold_amount.toLocaleString("en-IN")}`}
+              </strong></div>
+              {discrepancy.cumulative_fy_consideration != null && (
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#888' }}>Cumulative FY consideration</span><strong>₹{discrepancy.cumulative_fy_consideration.toLocaleString("en-IN")}</strong></div>
+              )}
+            </>
+          )}
           {discrepancy.difference != null && (
             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#888' }}>TDS gap</span><strong>₹{Math.abs(discrepancy.difference).toLocaleString("en-IN")}</strong></div>
           )}

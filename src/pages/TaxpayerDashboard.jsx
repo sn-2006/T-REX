@@ -313,7 +313,10 @@ export default function TaxpayerDashboard({ session, onLogout }) {
 
       // Existing reconciliation remains unchanged for centralized rows;
       // reconstructed DEX events are simply normalized trade rows here.
-      result = reconcile(allRows);
+      result = {
+        ...reconcile(allRows),
+        tdsRows: complianceResult.tdsRows,
+      };
     } else {
       // -------------------------------------------------------------
       // WALLET-ONLY MODE
@@ -526,7 +529,13 @@ export default function TaxpayerDashboard({ session, onLogout }) {
   }
 
   function downloadPdf() {
-    const doc = buildReportPdf({ ...reconciliation, narrative, reportHash, anchor });
+    const doc = buildReportPdf({
+      ...reconciliation,
+      narrative,
+      reportHash,
+      anchor,
+      tdsRows: reconciliation?.tdsRows || [],
+    });
     doc.save("chaintds-report.pdf");
   }
 

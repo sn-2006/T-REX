@@ -176,11 +176,15 @@ assert.equal(event.inrValue, 42100);
 assert.equal(event.actualInrReceived, null);
 assert.ok(event.receivedAssetFmvInrPerUnit != null);
 
-const compliance = analyzeRows([event]);
+const compliance = analyzeRows([event], {
+  taxpayerId: wallet,
+  deductorCategory: "other_person",
+});
 assert.equal(compliance.summary.confirmedVdaTransfers, 1);
-assert.equal(compliance.summary.expectedTds, 421);
+assert.equal(compliance.summary.expectedTds, null);
 assert.equal(compliance.discrepancies.length, 0);
 assert.equal(compliance.tdsRows[0].reportedTds, null);
+assert.equal(compliance.tdsRows[0].threshold_status, "REVIEW_REQUIRED");
 assert.equal(compliance.rows[0].consideration.valuationStatus, "ESTIMATED_INR");
 assert.equal(compliance.rows[0].consideration.actualInrReceived, null);
 assert.equal(compliance.rows[0].consideration.estimatedInrValue, 42100);

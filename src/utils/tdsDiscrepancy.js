@@ -7,7 +7,7 @@
 // says DEDUCTED.
 // ---------------------------------------------------------------------------
 
-const TDS_RATE = 0.01;
+import { SECTION_194S_RULES } from "../../shared/taxRules.js";
 
 export function computeAllTdsRows(allRows) {
   const eligibleTransfers = allRows.filter((r) => {
@@ -29,10 +29,21 @@ export function computeAllTdsRows(allRows) {
       valuationDifference: null,
     };
 
-    const expectedTds =
-      consideration.inrValue == null
+    const hasThresholdResult = typeof t.threshold_status === "string";
+    const belowThreshold =
+      t.threshold_status === "BELOW_THRESHOLD" && t.is_194s_applicable === false;
+    const thresholdCrossed =
+      (t.threshold_status === "THRESHOLD_CROSSED" || t.threshold_status === "ALREADY_CROSSED") &&
+      t.is_194s_applicable === true;
+    const expectedTds = hasThresholdResult
+      ? belowThreshold
+        ? 0
+        : thresholdCrossed && consideration.inrValue != null
+          ? Math.round(consideration.inrValue * SECTION_194S_RULES.tdsRate * 100) / 100
+          : null
+      : consideration.inrValue == null
         ? null
-        : Math.round(consideration.inrValue * TDS_RATE * 100) / 100;
+        : Math.round(consideration.inrValue * SECTION_194S_RULES.tdsRate * 100) / 100;
 
     let reportedTds;
     let reportedSource;
@@ -101,6 +112,16 @@ export function computeAllTdsRows(allRows) {
       date: t.date,
       inrValue: consideration.inrValue,
       consideration,
+      previous_fy_consideration: t.previous_fy_consideration ?? null,
+      current_consideration: t.current_consideration ?? null,
+      cumulative_fy_consideration: t.cumulative_fy_consideration ?? null,
+      remaining_threshold_before_transaction: t.remaining_threshold_before_transaction ?? null,
+      threshold_exceeded_amount: t.threshold_exceeded_amount ?? null,
+      is_194s_applicable: t.is_194s_applicable ?? null,
+      threshold_amount: t.threshold_amount ?? null,
+      threshold_crossed: t.threshold_crossed ?? null,
+      threshold_status: t.threshold_status ?? null,
+      threshold_reason: t.threshold_reason ?? null,
       expectedTds,
       reportedTds,
       reportedSource,
