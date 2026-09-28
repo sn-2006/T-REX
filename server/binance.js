@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { reliableFetch } from "./src/utils/reliableFetch.js";
 
 const BASE = "https://api.binance.com";
 
@@ -14,7 +15,7 @@ async function signedGet(path, params, apiKey, apiSecret) {
     .update(queryString)
     .digest("hex");
 
-  const response = await fetch(
+  const response = await reliableFetch(
     `${BASE}${path}?${queryString}&signature=${signature}`,
     {
       method: "GET",

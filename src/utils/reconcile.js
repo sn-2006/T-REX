@@ -64,21 +64,54 @@ export function reconcile(allRows) {
     return Math.round(amountScore + timeScore);
   }
 
-  for (const w of withdrawals) {
-    const candidate = deposits.find(
-      (d) =>
-        d.exchange !== w.exchange &&
-        d.asset === w.asset &&
-        Math.abs(d.amount - w.amount) < 0.0001 &&
-        daysBetween(w.date, d.date) <= 5 &&
-        !matchedDepositIds.has(d.refId)
-    );
+  const knownExchanges = ["binance", "coindcx", "wazirx", "kraken", "coinbase"];
 
-    if (candidate) {
+  for (const w of withdrawals) {
+    let bestCandidate = null;
+    let bestScore = -1;
+    const wEx = (w.exchange || "").toLowerCase();
+
+    for (const d of deposits) {
+      if (d.exchange === w.exchange || d.asset !== w.asset || matchedDepositIds.has(d.refId)) {
+        continue;
+      }
+
+      const isAmountMatch = Math.abs(d.amount - w.amount) < 0.0001;
+      const isDateMatch = daysBetween(w.date, d.date) <= 5;
+
+      let isSupported = false;
+      let isConflict = false;
+
+      if (d.provenanceEvidence) {
+        const provStr = JSON.stringify(d.provenanceEvidence).toLowerCase();
+        if (d.provenanceEvidence.sourceType === "EXCHANGE") {
+          if (provStr.includes(wEx)) {
+            isSupported = true;
+          } else {
+            const mentionsOther = knownExchanges.some(ex => ex !== wEx && provStr.includes(ex));
+            if (mentionsOther) isConflict = true;
+          }
+        } else if (d.provenanceEvidence.sourceType !== "UNKNOWN" && d.provenanceEvidence.sourceType !== "EXTERNAL_WALLET") {
+          isConflict = true;
+        }
+      }
+
+      if (isAmountMatch && isDateMatch && !isConflict) {
+        const baseScore = matchConfidence(w, d);
+        const totalScore = isSupported ? Math.min(100, baseScore + 20) : baseScore;
+        if (totalScore > bestScore) {
+          bestScore = totalScore;
+          bestCandidate = { d, score: totalScore, isSupported };
+        }
+      }
+    }
+
+    if (bestCandidate) {
+      const candidate = bestCandidate.d;
       matchedWithdrawalIds.add(w.refId);
       matchedDepositIds.add(candidate.refId);
       const gap = w.tdsStatus === "PENDING";
-      transferChecks.push({
+      const check = {
         asset: w.asset,
         amount: w.amount,
         from: w.exchange,
@@ -88,8 +121,12 @@ export function reconcile(allRows) {
         fromDate: w.date,
         toDate: candidate.date,
         status: gap ? "TDS_GAP" : "OK",
-        confidence: matchConfidence(w, candidate),
-      });
+        confidence: bestCandidate.score,
+      };
+      if (bestCandidate.isSupported) {
+        check.provenanceSupported = true;
+      }
+      transferChecks.push(check);
     }
   }
 
