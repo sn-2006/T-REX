@@ -4,10 +4,13 @@ import { analyzeRows } from "../server/src/compliance/tds.js";
 function sell(overrides = {}) {
   return {
     exchange: "Test Exchange",
+    date: "2025-05-10T10:00:00+05:30",
     type: "SELL",
     asset: "ETH",
     assetType: "VDA",
     amount: 1,
+    counterparty: "test-buyer",
+    deductorCategory: "other_person",
     tdsStatus: "DEDUCTED",
     refId: `test-${Math.random()}`,
     ...overrides,
@@ -15,13 +18,13 @@ function sell(overrides = {}) {
 }
 
 const allKnown = analyzeRows([
-  sell({ inrValue: 100, unitPrice: 100, quoteCurrency: "INR" }),
-  sell({ inrValue: 200, unitPrice: 200, quoteCurrency: "INR" }),
+  sell({ inrValue: 20000, unitPrice: 20000, quoteCurrency: "INR" }),
+  sell({ inrValue: 30000, unitPrice: 30000, quoteCurrency: "INR" }),
 ]);
-assert.equal(allKnown.summary.expectedTds, 3);
-assert.equal(allKnown.summary.reportedTds, 3);
+assert.equal(allKnown.summary.expectedTds, 500);
+assert.equal(allKnown.summary.reportedTds, 500);
 
-const genuineZero = analyzeRows([sell({ inrValue: 0 })]);
+const genuineZero = analyzeRows([sell({ inrValue: 0, unitPrice: 0, quoteCurrency: "INR" })]);
 assert.equal(genuineZero.summary.expectedTds, 0);
 assert.equal(genuineZero.summary.reportedTds, 0);
 

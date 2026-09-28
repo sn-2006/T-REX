@@ -7,10 +7,13 @@ import { buildTransactionEvidence } from "../src/utils/evidenceBuilder.js";
 function sell(overrides = {}) {
   return {
     exchange: "Test Exchange",
+    date: "2025-05-10T10:00:00+05:30",
     type: "SELL",
     asset: "ETH",
     assetType: "VDA",
     amount: 1,
+    counterparty: "test-buyer",
+    deductorCategory: "other_person",
     refId: "test-sale",
     ...overrides,
   };
@@ -55,44 +58,44 @@ assert.equal(unresolvedEvidence.closestCandidate, null);
 
 const equalKnown = analyzeRows([sell({
   refId: "equal-known",
-  inrValue: 100,
-  unitPrice: 100,
+  inrValue: 20000,
+  unitPrice: 20000,
   quoteCurrency: "INR",
   tdsStatus: "DEDUCTED",
 })]);
-assert.equal(equalKnown.tdsRows[0].expectedTds, 1);
-assert.equal(equalKnown.tdsRows[0].reportedTds, 1);
+assert.equal(equalKnown.tdsRows[0].expectedTds, 200);
+assert.equal(equalKnown.tdsRows[0].reportedTds, 200);
 assert.equal(equalKnown.tdsRows[0].difference, 0);
 assert.equal(equalKnown.tdsRows[0].status, "MATCHED");
 assert.equal(computeTdsDiscrepancies(equalKnown.rows).length, 0);
 
 const unequalKnown = analyzeRows([sell({
   refId: "unequal-known",
-  inrValue: 100,
-  unitPrice: 100,
+  inrValue: 20000,
+  unitPrice: 20000,
   quoteCurrency: "INR",
   tdsStatus: "DEDUCTED",
   tdsAmount: 0,
 })]);
-assert.equal(unequalKnown.tdsRows[0].expectedTds, 1);
+assert.equal(unequalKnown.tdsRows[0].expectedTds, 200);
 assert.equal(unequalKnown.tdsRows[0].reportedTds, 0);
 assert.equal(unequalKnown.tdsRows[0].status, "TDS_MISMATCH");
 assert.equal(computeTdsDiscrepancies(unequalKnown.rows).length, 1);
 
 const missingReported = analyzeRows([sell({
   refId: "missing-reported",
-  inrValue: 100,
-  unitPrice: 100,
+  inrValue: 20000,
+  unitPrice: 20000,
   quoteCurrency: "INR",
   tdsStatus: "PENDING",
 })]);
-assert.equal(missingReported.tdsRows[0].expectedTds, 1);
+assert.equal(missingReported.tdsRows[0].expectedTds, 200);
 assert.equal(missingReported.tdsRows[0].reportedTds, null);
 assert.equal(missingReported.tdsRows[0].status, "REVIEW_REQUIRED");
 assert.equal(computeTdsDiscrepancies(missingReported.rows).length, 0);
 
 const mixed = analyzeRows([
-  sell({ refId: "mixed-known", inrValue: 100, unitPrice: 100, quoteCurrency: "INR", tdsStatus: "DEDUCTED" }),
+  sell({ refId: "mixed-known", inrValue: 20000, unitPrice: 20000, quoteCurrency: "INR", tdsStatus: "DEDUCTED" }),
   sell({ refId: "mixed-unknown", asset: "USDC", tdsStatus: "NOT_REPORTED", transactionSource: "DECENTRALIZED_DEX" }),
 ]);
 assert.equal(mixed.summary.expectedTds, null);
@@ -102,6 +105,8 @@ assert.equal(computeAllTdsRows(mixed.rows).filter((row) => row.reviewRequired).l
 const zero = analyzeRows([sell({
   refId: "genuine-zero",
   inrValue: 0,
+  unitPrice: 0,
+  quoteCurrency: "INR",
   tdsStatus: "DEDUCTED",
 })]);
 assert.equal(zero.tdsRows[0].expectedTds, 0);

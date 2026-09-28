@@ -14,7 +14,10 @@ router.post("/analyze", requireAuth, (req, res) => {
 }
 
   try {
-    const result = analyzeRows(rows);
+    const result = analyzeRows(rows, {
+      taxpayerId: req.user.role === "taxpayer" ? req.user.id : null,
+      deductorCategory: req.user.deductorCategory ?? null,
+    });
     res.json(result);
   } catch (err) {
     console.error("Compliance analysis failed:", err);
