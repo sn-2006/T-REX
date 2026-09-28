@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { apiFetch } from "../../api/client";
+import DashboardHeader from "../../components/DashboardHeader";
 
-export default function AuditorDirectory() {
+export default function AuditorDirectory({ session, onLogout }) {
   const [auditors, setAuditors] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -26,10 +27,13 @@ export default function AuditorDirectory() {
   }
 
   return (
-    <main className="dashboard-main auditor-directory-page">
-      <section className="dashboard-section">
+    <div className="app app-wide">
+      <DashboardHeader session={session} roleLabel="Taxpayer dashboard" onLogout={onLogout} />
+      <main className="app-main auditor-directory-page">
+      <section className="card">
         <button
           type="button"
+          className="secondary-btn"
           onClick={() => (window.location.hash = "#/taxpayer")}
         >
           ← Back to Dashboard
@@ -49,15 +53,17 @@ export default function AuditorDirectory() {
         {!loading && !error && auditors.length > 0 && (
           <div className="auditor-directory">
             {auditors.map((auditor) => (
-              <article key={auditor.id} className="auditor-card">
-                <h2>{auditor.name}</h2>
+              <article key={auditor.id} className="card" style={{ marginBottom: "16px" }}>
+                <h2 style={{ fontSize: "24px", marginTop: "0" }}>{auditor.name}</h2>
 
-                <p>Auditor ID: {auditor.auditorId}</p>
-                <p>{auditor.availability}</p>
+                <p className="muted">Auditor ID: {auditor.auditorId}</p>
+                <p className="muted">{auditor.availability}</p>
 
                 <button
                   type="button"
+                  className="primary-btn"
                   onClick={() => openAuditor(auditor.id)}
+                  style={{ marginTop: "16px" }}
                 >
                   View Profile
                 </button>
@@ -67,5 +73,6 @@ export default function AuditorDirectory() {
         )}
       </section>
     </main>
+    </div>
   );
 }

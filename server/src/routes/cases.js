@@ -216,9 +216,12 @@ router.get("/mine", requireAuth, requireRole("taxpayer"), async (req, res) => {
 
 // GET /api/cases/assigned — auditor's assigned cases.
 router.get("/assigned", requireAuth, requireRole("auditor"), async (req, res) => {
-  const result = await pool.query(`${CASE_SELECT} WHERE c.auditor_id = $1 ORDER BY c.created_at DESC`, [
-    req.user.id,
-  ]);
+  const result = await pool.query(
+    `${CASE_SELECT} 
+     WHERE c.auditor_id = $1
+     ORDER BY c.created_at DESC`,
+    [req.user.id]
+  );
   res.json(await attachTransactions(result.rows));
 });
 
@@ -243,11 +246,8 @@ router.post("/:id/accept", requireAuth, requireRole("auditor"), async (req, res)
     [req.user.id, req.params.id]
   );
   if (result.rows.length === 0) {
-    return res
-      .status(409)
-      .json({ error: "This case was already accepted by another auditor." });
+    return res.status(409).json({ error: "Case already claimed or doesn't exist." });
   }
-
   const client = await pool.connect();
   try {
     const updated = await loadCaseWithTransactions(client, req.params.id);
@@ -255,6 +255,44 @@ router.post("/:id/accept", requireAuth, requireRole("auditor"), async (req, res)
   } finally {
     client.release();
   }
+});
+
+// POST /api/cases/:id/submit - Taxpayer explicitly submits a report to a connected auditor
+router.post("/:id/submit", requireAuth, requireRole("taxpayer"), async (req, res) => {
+  const { auditorId } = req.body;
+  if (!auditorId) {
+    return res.status(400).json({ error: "auditorId is required." });
+  }
+
+  // Ensure they have an active relationship with this auditor
+  const relResult = await pool.query(
+    `SELECT 1 FROM auditor_relationships 
+     JOIN auditor_requests req ON req.id = auditor_relationships.request_id 
+     WHERE auditor_relationships.taxpayer_id = $1 AND auditor_relationships.auditor_id = $2 AND req.status = 'Accepted'`,
+    [req.user.id, auditorId]
+  );
+
+  if (relResult.rowCount === 0) {
+    return res.status(403).json({ error: "You do not have an active connection with this auditor." });
+  }
+
+  // Update case
+  const updateResult = await pool.query(
+    `UPDATE cases SET auditor_id = $1, status = 'pending' WHERE id = $2 AND taxpayer_id = $3 RETURNING id`,
+    [auditorId, req.params.id, req.user.id]
+  );
+
+  if (updateResult.rowCount === 0) {
+    return res.status(404).json({ error: "Case not found or already submitted." });
+  }
+
+  // Notify auditor
+  await pool.query(
+    `INSERT INTO notifications (user_id, role, title, message, link) VALUES ($1, $2, $3, $4, $5)`,
+    [auditorId, 'auditor', 'Report Submitted', 'A taxpayer has submitted a report for verification.', '#/']
+  );
+
+  res.json({ status: "submitted" });
 });
 
 // GET /api/cases — all cases, read-only, regulator only.
@@ -270,10 +308,14 @@ router.get("/:id", requireAuth, async (req, res) => {
   const row = result.rows[0];
   if (!row) return res.status(404).json({ error: "Case not found." });
 
-  const owns =
+  let owns =
     req.user.role === "regulator" ||
-    (req.user.role === "taxpayer" && row.taxpayer_external_id === req.user.externalId) ||
-    (req.user.role === "auditor" && row.auditor_external_id === req.user.externalId);
+    (req.user.role === "taxpayer" && row.taxpayer_external_id === req.user.externalId);
+    
+  if (!owns && req.user.role === "auditor") {
+    owns = row.auditor_id === req.user.id;
+  }
+
   if (!owns) return res.status(403).json({ error: "You don't have access to this case." });
 
   const [c] = await attachTransactions([row]);
@@ -287,14 +329,23 @@ router.patch("/:id/status", requireAuth, requireRole("auditor"), async (req, res
     return res.status(400).json({ error: "Invalid status." });
   }
 
+  const relResult = await pool.query(
+    `SELECT 1 FROM cases WHERE id = $1 AND auditor_id = $2`,
+    [req.params.id, req.user.id]
+  );
+
+  if (relResult.rowCount === 0) {
+    return res.status(404).json({ error: "Case not found or taxpayer not assigned to you." });
+  }
+
   const result = await pool.query(
-    `UPDATE cases SET status = $1, review_note = COALESCE($2, review_note), reviewed_at = now()
-     WHERE id = $3 AND auditor_id = $4
+    `UPDATE cases SET status = $1, review_note = COALESCE($2, review_note), reviewed_at = now(), auditor_id = COALESCE(auditor_id, $4)
+     WHERE id = $3
      RETURNING id`,
     [status, reviewNote ?? null, req.params.id, req.user.id]
   );
   if (result.rows.length === 0) {
-    return res.status(404).json({ error: "Case not found or not assigned to you." });
+    return res.status(404).json({ error: "Case not found." });
   }
 
   const client = await pool.connect();

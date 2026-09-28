@@ -15,6 +15,7 @@ import auditorsRouter from "./routes/auditors.js";
 import auditorRequestsRouter from "./routes/auditorRequests.js";
 import auditorRequestActionsRouter from "./routes/auditorRequestActions.js";
 import conversationsRouter from "./routes/conversations.js";
+import notificationsRouter from "./routes/notifications.js";
 
 const app = express();
 
@@ -50,6 +51,7 @@ app.use(`${API_PREFIX}/auditors`, auditorsRouter);
 app.use(`${API_PREFIX}/auditor-requests`, auditorRequestsRouter);
 app.use(`${API_PREFIX}/auditor-requests`, auditorRequestActionsRouter);
 app.use(`${API_PREFIX}/conversations`, conversationsRouter);
+app.use(`${API_PREFIX}/notifications`, notificationsRouter);
 
 app.use((err, req, res, next) => {
   console.error("SERVER ERROR:", err);

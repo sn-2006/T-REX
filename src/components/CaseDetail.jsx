@@ -105,6 +105,59 @@ export default function CaseDetail({ case_, readOnly = false, onApprove, onFlag 
         </tbody>
       </table>
 
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h3>Transaction history (All rows)</h3>
+        <button 
+          className="secondary-btn small" 
+          onClick={() => {
+            const headers = "Date,Exchange,Type,Asset,Amount,INR Value,TDS,Ref ID\n";
+            const csv = allRows.map(r => `${r.date},${r.exchange},${r.type},${r.asset},${r.amount},${r.inrValue},${r.tdsAmount !== null ? r.tdsAmount : ""},${r.refId}`).join("\n");
+            const blob = new Blob([headers + csv], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `transactions_${case_.reportHash.slice(0,8)}.csv`;
+            a.click();
+            window.URL.revokeObjectURL(url);
+          }}
+        >
+          Export CSV
+        </button>
+      </div>
+      <div style={{ maxHeight: "400px", overflowY: "auto", marginBottom: "24px" }}>
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Exchange</th>
+              <th>Type</th>
+              <th>Asset</th>
+              <th>Amount</th>
+              <th>INR value</th>
+              <th>TDS</th>
+              <th>Ref ID</th>
+            </tr>
+          </thead>
+          <tbody>
+            {allRows.map((r, i) => (
+              <tr key={i}>
+                <td>{r.date}</td>
+                <td>{r.exchange}</td>
+                <td>{r.type}</td>
+                <td>{r.asset}</td>
+                <td>{r.amount}</td>
+                <td>{r.inrValue}</td>
+                <td>{r.tdsAmount !== null ? r.tdsAmount : "-"}</td>
+                <td style={{ fontSize: "10px", wordBreak: "break-all" }}>{r.refId}</td>
+              </tr>
+            ))}
+            {allRows.length === 0 && (
+              <tr><td colSpan={8} className="muted">No transactions found.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
       <h3>Cross-platform transfer check</h3>
       <table className="data-table">
         <thead>

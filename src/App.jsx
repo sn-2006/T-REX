@@ -11,6 +11,13 @@ import AuditorDashboard from "./pages/AuditorDashboard";
 import RegulatorDashboard from "./pages/RegulatorDashboard";
 import { getSession, logout } from "./auth/auth";
 import AuditorConversation from "./pages/AuditorConversation";
+import AuditorIncomingRequests from "./pages/auditor/AuditorIncomingRequests";
+import AuditorChats from "./pages/auditor/AuditorChats";
+import AuditorClosedRequests from "./pages/auditor/AuditorClosedRequests";
+import PlaceholderPage from "./pages/taxpayer/PlaceholderPage";
+import ReconciliationHistory from "./pages/taxpayer/ReconciliationHistory";
+import PreviousCARecords from "./pages/taxpayer/PreviousCARecords";
+import AccountSettings from "./pages/AccountSettings";
 import "./App.css";
 
 const DASHBOARD_ROUTE = {
@@ -86,7 +93,7 @@ if (route === "#/taxpayer/auditors") {
   return (
     <div className="site">
       <div className="grain" />
-      <AuditorDirectory />
+      <AuditorDirectory session={session} onLogout={handleLogout} />
     </div>
   );
 }
@@ -101,7 +108,7 @@ if (route.startsWith("#/taxpayer/auditors/")) {
   return (
     <div className="site">
       <div className="grain" />
-      <AuditorProfile auditorId={auditorId} />
+      <AuditorProfile auditorId={auditorId} session={session} onLogout={handleLogout} />
     </div>
   );
 }
@@ -114,7 +121,7 @@ if (route === "#/taxpayer/auditor-requests") {
   return (
     <div className="site">
       <div className="grain" />
-      <MyAuditorRequests />
+      <MyAuditorRequests session={session} onLogout={handleLogout} />
     </div>
   );
 }
@@ -127,52 +134,42 @@ if (route === "#/taxpayer/conversations") {
   return (
     <div className="site">
       <div className="grain" />
-      <TaxpayerConversation />
+      <TaxpayerConversation session={session} onLogout={handleLogout} />
     </div>
   );
 }
 
-  if (route === "#/taxpayer") {
-    if (route === "#/taxpayer/auditors") {
-  if (!session || session.role !== "taxpayer") {
-    return <RedirectToLogin role="taxpayer" />;
-  }
-
+if (route === "#/taxpayer/reconciliation-verification") {
+  if (!session || session.role !== "taxpayer") return <RedirectToLogin role="taxpayer" />;
   return (
     <div className="site">
       <div className="grain" />
-      <AuditorDirectory session={session} />
+      <ReconciliationHistory session={session} onLogout={handleLogout} />
     </div>
   );
 }
 
-if (route.startsWith("#/taxpayer/auditors/")) {
-  if (!session || session.role !== "taxpayer") {
-    return <RedirectToLogin role="taxpayer" />;
-  }
-
-  const auditorId = route.replace("#/taxpayer/auditors/", "");
-
+if (route === "#/taxpayer/previous-ca-records") {
+  if (!session || session.role !== "taxpayer") return <RedirectToLogin role="taxpayer" />;
   return (
     <div className="site">
       <div className="grain" />
-      <AuditorProfile auditorId={auditorId} />
+      <PreviousCARecords session={session} onLogout={handleLogout} />
     </div>
   );
 }
 
-if (route === "#/taxpayer/auditor-requests") {
-  if (!session || session.role !== "taxpayer") {
-    return <RedirectToLogin role="taxpayer" />;
-  }
-
+if (route === "#/account" || route === "#/taxpayer/account") {
+  if (!session) return <RedirectToLogin role="taxpayer" />;
   return (
     <div className="site">
       <div className="grain" />
-      <MyAuditorRequests />
+      <AccountSettings session={session} onLogout={handleLogout} />
     </div>
   );
 }
+
+  if (route.startsWith("#/taxpayer")) {
     if (!session || session.role !== "taxpayer") return <RedirectToLogin role="taxpayer" />;
     return (
       <div className="site">
@@ -197,9 +194,41 @@ if (route === "#/taxpayer/auditor-requests") {
       <div className="grain" />
       <AuditorConversation
         conversationId={conversationId}
+        session={session}
+        onLogout={handleLogout}
       />
     </div>
   );
+  }
+
+  if (route === "#/auditor/incoming-requests") {
+    if (!session || session.role !== "auditor") return <RedirectToLogin role="auditor" />;
+    return (
+      <div className="site">
+        <div className="grain" />
+        <AuditorIncomingRequests session={session} onLogout={handleLogout} />
+      </div>
+    );
+  }
+
+  if (route === "#/auditor/chats") {
+    if (!session || session.role !== "auditor") return <RedirectToLogin role="auditor" />;
+    return (
+      <div className="site">
+        <div className="grain" />
+        <AuditorChats session={session} onLogout={handleLogout} />
+      </div>
+    );
+  }
+
+  if (route === "#/auditor/closed-requests") {
+    if (!session || session.role !== "auditor") return <RedirectToLogin role="auditor" />;
+    return (
+      <div className="site">
+        <div className="grain" />
+        <AuditorClosedRequests session={session} onLogout={handleLogout} />
+      </div>
+    );
   }
 
   if (route === "#/auditor") {
@@ -226,7 +255,7 @@ if (route === "#/taxpayer/auditor-requests") {
   // The landing page is visible first. The user can explore all sections
   // and click "Get Started" or select a portal to open their dashboard or login.
   return (
-    <div className="site">
+    <div className="site landing-page-wrapper">
       <div className="grain" />
       <LandingPage />
     </div>

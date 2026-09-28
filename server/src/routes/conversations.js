@@ -21,9 +21,11 @@ router.get(
          FROM conversations c
          JOIN auditor_relationships ar
            ON ar.id = c.relationship_id
+         JOIN auditor_requests req
+           ON req.id = ar.request_id
          JOIN users u
            ON u.id = ar.auditor_id
-         WHERE ar.taxpayer_id = $1
+         WHERE ar.taxpayer_id = $1 AND req.status = 'Accepted'
          ORDER BY c.created_at DESC`,
         [req.user.id]
       );
@@ -107,24 +109,41 @@ router.post("/:id/messages", requireAuth, async (req, res) => {
   }
 
   try {
-    const result = await pool.query(
-      `INSERT INTO messages (conversation_id, sender_id, message)
-       SELECT c.id, $2, $3
+    const rel = await pool.query(
+      `SELECT ar.taxpayer_id, ar.auditor_id, req.status
        FROM conversations c
        JOIN auditor_relationships ar ON ar.id = c.relationship_id
-       WHERE c.id = $1
-         AND (ar.taxpayer_id = $2 OR ar.auditor_id = $2)
+       JOIN auditor_requests req ON req.id = ar.request_id
+       WHERE c.id = $1 AND (ar.taxpayer_id = $2 OR ar.auditor_id = $2)`,
+      [req.params.id, req.user.id]
+    );
+
+    if (!rel.rowCount) {
+      return res.status(404).json({ error: "Conversation not found." });
+    }
+    if (rel.rows[0].status !== 'Accepted') {
+      return res.status(403).json({ error: "Cannot send messages to an inactive conversation." });
+    }
+    const { taxpayer_id, auditor_id } = rel.rows[0];
+
+    const result = await pool.query(
+      `INSERT INTO messages (conversation_id, sender_id, message)
+       VALUES ($1, $2, $3)
        RETURNING id, conversation_id, sender_id, message, created_at`,
       [req.params.id, req.user.id, message]
     );
 
-    if (!result.rowCount) {
-      return res.status(404).json({
-        error: "Conversation not found.",
-      });
-    }
+    const newMsg = result.rows[0];
+    const receiverId = req.user.id === taxpayer_id ? auditor_id : taxpayer_id;
+    const receiverRole = req.user.id === taxpayer_id ? 'auditor' : 'taxpayer';
+    const link = req.user.id === taxpayer_id ? `#/auditor/conversations/${newMsg.conversation_id}` : `#/taxpayer/conversations`;
 
-    return res.status(201).json(result.rows[0]);
+    await pool.query(
+      `INSERT INTO notifications (user_id, role, title, message, link) VALUES ($1, $2, $3, $4, $5)`,
+      [receiverId, receiverRole, 'New Message', 'You have received a new message.', link]
+    );
+
+    return res.status(201).json(newMsg);
   } catch (err) {
     console.error("Send message error:", err);
     return res.status(500).json({
