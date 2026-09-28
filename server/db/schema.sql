@@ -29,6 +29,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto; -- gives us gen_random_uuid()
 CREATE TYPE user_role AS ENUM ('taxpayer', 'auditor', 'regulator');
 CREATE TYPE case_status AS ENUM ('pending', 'high-risk', 'flagged', 'verified');
 CREATE TYPE kyc_status AS ENUM ('not_submitted', 'pending', 'verified', 'rejected');
+CREATE TYPE deductor_category AS ENUM ('specified_person', 'other_person', 'unknown');
 
 -- ---------------------------------------------------------------------------
 -- users — replaces the hardcoded DEMO_AUDITORS / DEMO_REGULATORS arrays and
@@ -44,6 +45,9 @@ CREATE TABLE users (
   email          TEXT,            -- taxpayer's email; NULL for staff
   email_verified BOOLEAN NOT NULL DEFAULT false,
   kyc_status     kyc_status NOT NULL DEFAULT 'not_submitted', -- denormalized from kyc_submissions for a fast gate check on report creation
+  -- Taxpayer-declared Section 194S deductor category. Never inferred from
+  -- PAN/KYC/wallet/DEX data; defaults to unknown until the taxpayer sets it.
+  deductor_category deductor_category NOT NULL DEFAULT 'unknown',
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (role, external_id)
 );
@@ -54,6 +58,8 @@ CREATE TABLE users (
 --   ALTER TABLE users ADD COLUMN email_verified BOOLEAN NOT NULL DEFAULT false;
 --   CREATE TYPE kyc_status AS ENUM ('not_submitted', 'pending', 'verified', 'rejected');
 --   ALTER TABLE users ADD COLUMN kyc_status kyc_status NOT NULL DEFAULT 'not_submitted';
+--   CREATE TYPE deductor_category AS ENUM ('specified_person', 'other_person', 'unknown');
+--   ALTER TABLE users ADD COLUMN deductor_category deductor_category NOT NULL DEFAULT 'unknown';
 
 -- ---------------------------------------------------------------------------
 -- email_otps — one-time codes for verifying a taxpayer's email address.
