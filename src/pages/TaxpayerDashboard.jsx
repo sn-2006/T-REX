@@ -1137,7 +1137,7 @@ export default function TaxpayerDashboard({ session, onLogout }) {
                 <h1>Report finalized</h1>
                 <p className="muted">
                   This report's fingerprint has been anchored{" "}
-                  {isChainConfigured ? "via MetaMask" : "(simulated)"} on{" "}
+                  {isChainConfigured ? "via BridgeKey" : "(simulated)"} on{" "}
                   {anchor.network}. Scan the QR — it opens a real verification page in this
                   app rather than a placeholder link.
                 </p>

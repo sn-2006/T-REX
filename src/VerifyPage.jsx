@@ -18,7 +18,7 @@ export default function VerifyPage({ hash }) {
           if (result.found) {
             setRecord({
               reportHash: hash,
-              network: "Polygon Amoy",
+              network: "MST Testnet",
               submitter: result.submitter,
               timestamp: result.timestamp,
             });
@@ -83,7 +83,7 @@ export default function VerifyPage({ hash }) {
               <h1>✓ Verified</h1>
               <p className="muted">
                 {isChainConfigured
-                  ? "This hash is anchored on the Polygon Amoy smart contract."
+                  ? "This hash is anchored on the MST Testnet smart contract."
                   : "This report's fingerprint matches a record on this device. No contract is configured yet — this is the local fallback, not a real on-chain check."}
               </p>
               <div className="kv"><span>SHA-256</span><code>{record.reportHash}</code></div>
@@ -101,7 +101,7 @@ export default function VerifyPage({ hash }) {
               <p className="muted">
                 {isChainConfigured
                   ? "This hash hasn't been anchored on the contract."
-                  : "No report matching this hash was found on this device. Once VITE_CONTRACT_ADDRESS is set, this page checks the real Polygon Amoy contract instead — verifiable from any device."}
+                  : "No report matching this hash was found on this device. Once VITE_CONTRACT_ADDRESS is set, this page checks the real MST Testnet contract instead — verifiable from any device."}
               </p>
             </>
           )}

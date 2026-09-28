@@ -28,7 +28,7 @@ export async function sha256Hex(obj) {
     .join("");
 }
 
-// Prototype-only stand-in for the real Polygon Amoy anchoring transaction.
+// Prototype-only stand-in for the real MST Testnet anchoring transaction.
 // Wiring this to an actual deployed Solidity contract via ethers.js is the
 // next step once the reconciliation + report pipeline above is solid.
 export function mockAnchorOnChain(hash) {
@@ -38,7 +38,7 @@ export function mockAnchorOnChain(hash) {
       "0123456789abcdef"[Math.floor(Math.random() * 16)]
     ).join("");
   return {
-    network: "Polygon Amoy (simulated)",
+    network: "MST Testnet (simulated)",
     txHash: fakeTxHash,
     blockNumber: 12_400_000 + Math.floor(Math.random() * 5000),
     timestamp: new Date().toISOString(),

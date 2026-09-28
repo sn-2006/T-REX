@@ -410,7 +410,7 @@ export default function LandingPage() {
                 ["02", "NORMALIZE", "Convert heterogeneous transaction schemas into one canonical schema."],
                 ["03", "RECONCILE", "Correlate cross-exchange transfers, compute Section 194S TDS, and identify discrepancies."],
                 ["04", "ANALYZE", "Specialized AI highlights compliance gaps, valuation anomalies, and risk tiers."],
-                ["05", "VERIFY", "Fingerprint reports with SHA-256 and anchor immutably on the Polygon blockchain."],
+                ["05", "VERIFY", "Fingerprint reports with SHA-256 and anchor immutably on MST Testnet."],
               ].map(([n, t, d], i) => (
                 <div className="step" key={n}>
                   <div className="step-number">{n}</div>
@@ -447,7 +447,7 @@ export default function LandingPage() {
                 <div className="arch-col">
                   <small>VERIFICATION LAYER</small>
                   <b>SHA-256 HASHING</b>
-                  <b>POLYGON SMART CONTRACT</b>
+                  <b>MST TESTNET SMART CONTRACT</b>
                   <b>QR VERIFICATION REPORT</b>
                 </div>
               </div>
@@ -640,7 +640,7 @@ export default function LandingPage() {
                 <p>
                   We reconcile fragmented transactions, surface compliance gaps with AI,
                   calculate Section 194S liabilities with precision, and generate verifiable
-                  audit reports anchored cryptographically on Polygon Amoy.
+                  audit reports anchored cryptographically on MST Testnet.
                 </p>
                 <button className="outline-btn" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}>
                   BACK TO TOP <Arrow />
@@ -656,7 +656,7 @@ export default function LandingPage() {
               </div>
               <div className="team-item">
                 <strong>ENGINEERING</strong>
-                <span>AI ASSISTANT × REST APIS × POLYGON SMART CONTRACTS</span>
+                <span>AI ASSISTANT × REST APIS × MST TESTNET SMART CONTRACTS</span>
               </div>
               <div className="team-item">
                 <strong>DESIGN</strong>
