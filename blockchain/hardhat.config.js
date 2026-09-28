@@ -1,16 +1,16 @@
 require("@nomicfoundation/hardhat-toolbox");
 require("dotenv").config();
 
-const { AMOY_RPC_URL, PRIVATE_KEY } = process.env;
+const { MST_RPC_URL, PRIVATE_KEY } = process.env;
 
 /** @type import('hardhat/config').HardhatUserConfig */
 module.exports = {
   solidity: "0.8.20",
   networks: {
-    amoy: {
-      url: AMOY_RPC_URL || "",
+    mstTestnet: {
+      url: MST_RPC_URL || "https://testnetrpc.mstblockchain.com",
       accounts: PRIVATE_KEY ? [PRIVATE_KEY] : [],
-      chainId: 80002,
+      chainId: 91562037,
     },
   },
 };
