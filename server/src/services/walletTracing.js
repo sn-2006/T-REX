@@ -10,6 +10,7 @@ import {
   reconstructAmmRoute,
   computeEvidenceConfidence,
 } from "./dexEventDecoder.js";
+import { reconstructDeFiActivity } from "./defiReconstruction.js";
 
 const ETH_MAINNET_CHAIN_ID = 1;
 const MAX_PAGES = Number(process.env.WALLET_MAX_PAGES || 20);
@@ -865,6 +866,34 @@ async function reconstructDexEvents(rootAddress, transfers, labels) {
   return candidates;
 }
 
+async function reconstructDeFiEvents(rootAddress, transfers, labels, dexHashes = new Set(), liquidityHashes = new Set()) {
+  const grouped = aggregateWalletMovements(transfers, rootAddress);
+  const byHash = new Map();
+  for (const movement of grouped) {
+    if (!byHash.has(movement.hash)) byHash.set(movement.hash, []);
+    byHash.get(movement.hash).push(movement);
+  }
+
+  const defiEvents = [];
+  for (const [hash, movements] of byHash) {
+    if (dexHashes.has(hash) || liquidityHashes.has(hash)) continue;
+    const txRecord = await getTransaction(hash);
+    if (!txRecord?.transaction) continue;
+    const label = labels[String(txRecord.transaction?.to || "").toLowerCase()] || null;
+    const reconstructed = reconstructDeFiActivity({
+      txHash: hash,
+      movements,
+      txRecord,
+      label,
+      rootAddress,
+    });
+    if (reconstructed) {
+      defiEvents.push(reconstructed);
+    }
+  }
+  return defiEvents;
+}
+
 export async function analyzeEthereumWallet(address, { includeNormalizedRows = false, ownershipContext = {} } = {}) {
   const rootAddress = address.trim();
   assertEthereumAddress(rootAddress);
@@ -901,6 +930,9 @@ export async function analyzeEthereumWallet(address, { includeNormalizedRows = f
   const dexEvents = await reconstructDexEvents(rootAddress, transfers, labels);
   const liquidityEvents = await reconstructLiquidityEvents(rootAddress, transfers);
   const liquidityPositions = trackLiquidityPositions(liquidityEvents);
+  const dexHashes = new Set(dexEvents.map((event) => event.txHash));
+  const liquidityHashes = new Set(liquidityEvents.map((event) => event.transactionHash || event.txHash));
+  const defiEvents = await reconstructDeFiEvents(rootAddress, transfers, labels, dexHashes, liquidityHashes);
   const normalizedRows = includeNormalizedRows ? transfers.map((t) => normalizeTransfer(t, rootAddress)) : null;
 
   const dexTransferRefs = new Map();
@@ -912,6 +944,12 @@ export async function analyzeEthereumWallet(address, { includeNormalizedRows = f
   const liquidityTransferRefs = new Map();
   liquidityEvents.forEach((event) => {
     event.sourceTransferRefs.forEach((ref) => liquidityTransferRefs.set(ref, event));
+  });
+  const defiTransferRefs = new Map();
+  defiEvents.forEach((event) => {
+    (event.sourceTransferRefs || []).forEach((ref) => {
+      defiTransferRefs.set(ref, event);
+    });
   });
   const transactionRecords = new Map();
   for (const hash of new Set(transfers.map((transfer) => transfer.hash).filter(Boolean))) {
@@ -968,6 +1006,53 @@ export async function analyzeEthereumWallet(address, { includeNormalizedRows = f
         classification: normalized.transactionClassification,
       };
     }
+    if (defiTransferRefs.has(refId)) {
+      const event = defiTransferRefs.get(refId);
+      const isWrapUnwrap = event.kind === "WRAP" || event.kind === "UNWRAP";
+      const isBridge = event.kind === "BRIDGE";
+      const isStaking = event.kind === "STAKE" || event.kind === "UNSTAKE";
+      const isFlashLoan = event.kind === "FLASH_LOAN";
+      const isUnknown = event.kind === "UNKNOWN_DEFI";
+
+      const legType = isWrapUnwrap
+        ? "WRAP_UNWRAP_LEG"
+        : isBridge
+          ? "BRIDGE_LEG"
+          : isStaking
+            ? "STAKING_LEG"
+            : isFlashLoan
+              ? "FLASH_LOAN_LEG"
+              : "UNKNOWN_DEFI_LEG";
+
+      const legStatus = isUnknown
+        ? "PENDING_MANUAL_REVIEW"
+        : isWrapUnwrap
+          ? "RECONSTRUCTED_WRAP_LEG"
+          : isBridge
+            ? "RECONSTRUCTED_BRIDGE_LEG"
+            : isStaking
+              ? "RECONSTRUCTED_STAKING_LEG"
+              : "RECONSTRUCTED_FLASH_LOAN_LEG";
+
+      return {
+        refId,
+        txHash: transfer.hash,
+        type: legType,
+        status: legStatus,
+        complianceIncluded: false,
+        accountedFor: !isUnknown,
+        fullyVerified: event.reconstructionStatus === "VERIFIED",
+        reconstructedEventId: event.id,
+        valuationStatus: "NOT_APPLICABLE",
+        reason: event.reason || `Raw transfer leg grouped into reconstructed ${event.kind} economic event.`,
+        evidenceSources: [
+          "Alchemy asset transfer",
+          "Alchemy transaction receipt",
+          `DeFi ${event.kind} reconstruction`,
+        ],
+        classification: normalized.transactionClassification,
+      };
+    }
     const classification = normalized.transactionClassification;
     const outcomeType = classification.status === "NOT_TRANSFER"
       ? "SELF_TRANSFER"
@@ -1013,6 +1098,9 @@ export async function analyzeEthereumWallet(address, { includeNormalizedRows = f
     const liquidityEvent = outcome?.type === "LIQUIDITY_EVENT_LEG"
       ? liquidityEvents.find((candidate) => candidate.sourceTransferRefs.includes(refId))
       : null;
+    const defiEvent = outcome?.reconstructedEventId
+      ? defiEvents.find((candidate) => candidate.id === outcome.reconstructedEventId)
+      : null;
     const ammFallback = event ? null : decodeReceiptAmmEvents(receipt?.logs, transfer.hash);
     const decodedAmmEvents = event?.reconstruction?.decodedEvents ?? ammFallback?.decodedEvents ?? [];
     const gasEvidence = buildGasEvidence(receipt, transaction, transfer.hash);
@@ -1048,6 +1136,7 @@ export async function analyzeEthereumWallet(address, { includeNormalizedRows = f
       receiptVerified: event ? (event.reconstruction?.verifiedByReceipt ?? false) : (ammFallback?.hasAmmSwap ?? decodedAmmEvents.some((e) => e.eventType === "Swap")),
       decodedAmmEvents,
       liquidityEvent,
+      defiEvent,
     };
   });
   const outcomeCounts = Object.fromEntries(
@@ -1060,10 +1149,11 @@ export async function analyzeEthereumWallet(address, { includeNormalizedRows = f
   const traceability = {
     rawTransferCount: transfers.length,
     classifiedTransferCount: transferOutcomes.length,
-    reconstructedEventCount: dexEvents.length,
+    reconstructedEventCount: dexEvents.length + defiEvents.length,
     complianceRowCount: dexEvents.length,
     liquidityEventCount: liquidityEvents.length,
     liquidityPositionCount: liquidityPositions.length,
+    defiEventCount: defiEvents.length,
     excludedTransferCount: transferOutcomes.filter(
       (outcome) => !outcome.complianceIncluded && outcome.status !== "PENDING_MANUAL_REVIEW"
     ).length,
@@ -1083,11 +1173,11 @@ export async function analyzeEthereumWallet(address, { includeNormalizedRows = f
 
   const walletRows = normalizedRows || transfers.map((t) => normalizeTransfer(t, rootAddress));
   const walletReconciliation = reconcileWallet(walletRows.map((row) => withTransactionClassification(row)));
-  const dexHashes = new Set(dexEvents.map((event) => event.txHash));
+  const dexHashesSet = new Set(dexEvents.map((event) => event.txHash));
   walletReconciliation.derivedDexEventCount = dexEvents.length;
   walletReconciliation.taxableTransactionCount = dexEvents.length;
   walletReconciliation.manualVerification = (walletReconciliation.manualVerification || []).filter(
-    (item) => !dexHashes.has(String(item.refId || "").split("-")[0])
+    (item) => !dexHashesSet.has(String(item.refId || "").split("-")[0])
   );
   walletReconciliation.manualVerificationCount = walletReconciliation.manualVerification.length;
   walletReconciliation.tdsStatus = dexEvents.some((r) => r.inrValue != null)
@@ -1138,8 +1228,10 @@ export async function analyzeEthereumWallet(address, { includeNormalizedRows = f
     transferCount: transfers.length,
     derivedDexEventCount: dexEvents.length,
     derivedLiquidityEventCount: liquidityEvents.length,
+    derivedDeFiEventCount: defiEvents.length,
     derivedTransactions: dexEvents,
     derivedLiquidityEvents: liquidityEvents,
+    derivedDeFiEvents: defiEvents,
     derivedLiquidityPositions: liquidityPositions,
     traceability,
     walletOwnership,
