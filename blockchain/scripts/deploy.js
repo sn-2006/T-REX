@@ -2,12 +2,12 @@ const hre = require("hardhat");
 
 // Frontend env values to print after deploying, per network.
 const NETWORK_INFO = {
-  amoy: {
-    rpcUrl: process.env.AMOY_RPC_URL,
-    chainIdHex: "0x13882", // 80002
-    chainName: "Polygon Amoy",
-    currencySymbol: "POL",
-    explorerUrl: "https://amoy.polygonscan.com",
+  mstTestnet: {
+    rpcUrl: process.env.MST_RPC_URL || "https://testnetrpc.mstblockchain.com",
+    chainIdHex: "0x5752035",
+    chainName: "MST Testnet",
+    currencySymbol: "tMSTC",
+    explorerUrl: "https://testnet.mstscan.com",
   },
   localhost: {
     rpcUrl: "http://127.0.0.1:8545",

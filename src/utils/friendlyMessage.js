@@ -37,7 +37,7 @@ export function getFriendlyBlockchainMessage(error) {
     message.includes("action_rejected") ||
     message.includes("user denied")
   ) {
-    return "The transaction was cancelled in MetaMask. No blockchain transaction was submitted.";
+    return "The transaction was cancelled in BridgeKey. No blockchain transaction was submitted.";
   }
 
   if (
