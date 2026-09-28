@@ -132,6 +132,19 @@ const { reconcile } = await import("../src/utils/reconcile.js");
 const analysis = await analyzeEthereumWallet(wallet);
 const emptyAnalysis = await analyzeEthereumWallet("0x1000000000000000000000000000000000000009");
 
+assert.equal(analysis.sourceOfFunds.incomingTransfers.length, incoming.length);
+assert.ok(analysis.sourceOfFunds.incomingTransfers.every((source) => source.sourceTxHash));
+assert.equal(
+  analysis.sourceOfFunds.incomingTransfers.find((source) => source.sourceTxHash === hashes.single)?.sourceType,
+  "DEX_DEFI",
+  "Receipt-reconstructed DEX events must inform source-of-funds results"
+);
+assert.equal(
+  analysis.sourceOfFunds.incomingTransfers.find((source) => source.sourceTxHash === hashes.unknown)?.ownershipStatus,
+  "UNKNOWN",
+  "Unverified source-wallet ownership must remain unknown"
+);
+assert.equal(emptyAnalysis.sourceOfFunds.overallStatus, "REVIEW_REQUIRED");
 assert.equal(analysis.transferCount, incoming.length + outgoing.length);
 assert.equal(emptyAnalysis.transferCount, 0);
 assert.equal(emptyAnalysis.derivedDexEventCount, 0);

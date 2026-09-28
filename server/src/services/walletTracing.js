@@ -1,5 +1,6 @@
 import { reconcileWallet } from "../../../src/utils/reconcile.js";
 import { withTransactionClassification } from "../../../src/utils/transactionClassifier.js";
+import { buildWalletOwnershipMap } from "../../../src/utils/walletOwnership.js";
 import { resolveHistoricalInrValuation } from "./inrValuation.js";
 import { computeAmmFinancialMetrics } from "./ammFinancialMetrics.js";
 import {
@@ -22,6 +23,342 @@ const METASLEUTH_LABEL_URL = "https://aml.blocksec.com/address-label/api/v3/batc
 const METASLEUTH_RISK_URL = "https://aml.blocksec.com/address-compliance/api/v3/risk-score";
 
 const STABLECOINS = new Set(["USDC", "USDT", "DAI", "USDS", "USDE"]);
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+const SOURCE_TYPES = ["EXCHANGE", "EXTERNAL_WALLET", "DEX_DEFI", "BRIDGE", "MINING_REWARD", "STAKING_REWARD", "UNKNOWN"];
+
+function normalizeAddress(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const lower = trimmed.toLowerCase();
+  return /^0x[a-f0-9]{40}$/.test(lower) ? lower : null;
+}
+
+function labelTextFor(labels, sourceWallet) {
+  const address = normalizeAddress(sourceWallet);
+  const entry = address ? labels?.[address] || labels?.[address.toLowerCase()] : null;
+  if (!entry) return "";
+  return [entry.main_entity, entry.main_entity_info?.entity, entry.name_tag, entry.entity, entry.label]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+}
+
+function matchesKeywords(text, keywords) {
+  const normalized = String(text || "").toLowerCase();
+  return keywords.some((keyword) => normalized.includes(keyword.toLowerCase()));
+}
+
+function dedupeTransferRecords(transfers = []) {
+  const seen = new Set();
+  return transfers.filter((transfer) => {
+    const txHash = (transfer?.txHash || transfer?.hash || transfer?.transactionHash || "").toLowerCase();
+    const source = normalizeAddress(transfer?.fromAddress || transfer?.from || transfer?.sourceWallet) || "";
+    const destination = normalizeAddress(transfer?.toAddress || transfer?.to || transfer?.destinationWallet) || "";
+    const asset = String(transfer?.asset || transfer?.tokenContract || transfer?.rawContract?.address || "").toLowerCase();
+    const movementId = transfer?.uniqueId || `${source}:${destination}:${asset}:${transfer?.amount ?? transfer?.value ?? ""}`;
+    const key = `${txHash}:${movementId}`;
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function classifyObservedSource({
+  sourceWallet,
+  destinationWallet,
+  walletOwnership = {},
+  labels = {},
+  transfer = null,
+  dexEvent = null,
+}) {
+  const sourceAddress = normalizeAddress(sourceWallet || transfer?.fromAddress || transfer?.from || transfer?.sourceWallet);
+  const destinationAddress = normalizeAddress(destinationWallet || transfer?.toAddress || transfer?.to || transfer?.destinationWallet);
+  const sourceLabelText = labelTextFor(labels, sourceAddress);
+  const transferLabelText = [transfer?.label, transfer?.entity, transfer?.sourceType, transfer?.category].filter(Boolean).join(" ");
+  const combinedText = `${sourceLabelText} ${transferLabelText}`.trim();
+
+  if (!sourceAddress || !destinationAddress) {
+    return {
+      sourceType: "UNKNOWN",
+      confidence: "LOW",
+      evidenceStatus: "REVIEW_REQUIRED",
+      reviewRequired: true,
+      reason: "No identifiable source wallet or destination wallet was available for the incoming transfer.",
+    };
+  }
+
+  const sourceOwnership = sourceAddress ? walletOwnership[sourceAddress] || null : null;
+  const destinationOwnership = destinationAddress ? walletOwnership[destinationAddress] || null : null;
+  const sameVerifiedUser = sourceOwnership && destinationOwnership && sourceOwnership.ownerUserId && destinationOwnership.ownerUserId && sourceOwnership.ownerUserId === destinationOwnership.ownerUserId && sourceOwnership.status === "VERIFIED" && destinationOwnership.status === "VERIFIED";
+  if (sameVerifiedUser || (sourceAddress === destinationAddress && sourceOwnership?.status === "VERIFIED" && sourceOwnership.ownerUserId)) {
+    return {
+      sourceType: "UNKNOWN",
+      confidence: "HIGH",
+      evidenceStatus: "VERIFIED",
+      reviewRequired: false,
+      ownershipTransferType: "SELF_TRANSFER",
+      ownershipStatus: sourceAddress === destinationAddress ? sourceOwnership?.status || "UNKNOWN" : "VERIFIED",
+      reason: "Verified ownership evidence shows this movement is between the same user's wallets; it is not an external source of funds.",
+    };
+  }
+
+  if (sourceAddress === destinationAddress) {
+    return {
+      sourceType: "UNKNOWN",
+      confidence: "LOW",
+      evidenceStatus: "REVIEW_REQUIRED",
+      reviewRequired: true,
+      ownershipStatus: sourceOwnership?.status || "UNKNOWN",
+      reason: "The transfer uses the same source and destination address, but ownership evidence is not verified.",
+    };
+  }
+
+  if (sourceAddress === ZERO_ADDRESS && !matchesKeywords(combinedText, ["mining reward", "miner reward", "coinbase reward", "block reward"])) {
+    return {
+      sourceType: "UNKNOWN",
+      confidence: "LOW",
+      evidenceStatus: "REVIEW_REQUIRED",
+      reviewRequired: true,
+      ownershipStatus: sourceOwnership?.status || "UNKNOWN",
+      reason: "A zero-address transfer alone cannot distinguish a mining reward from an airdrop, mint, or other contract event.",
+    };
+  }
+
+  if (dexEvent) {
+    return {
+      sourceType: "DEX_DEFI",
+      confidence: "HIGH",
+      evidenceStatus: "PARTIAL",
+      reviewRequired: false,
+      reason: "The incoming transfer is linked to a receipt-reconstructed DEX/DeFi event. This identifies the observable transaction path, not the ultimate source of funds.",
+    };
+  }
+
+  if (matchesKeywords(combinedText, ["mining reward", "miner reward", "coinbase reward", "block reward"])) {
+    return {
+      sourceType: "MINING_REWARD",
+      confidence: "MEDIUM",
+      evidenceStatus: "PARTIAL",
+      reviewRequired: false,
+      ownershipStatus: sourceOwnership?.status || "UNKNOWN",
+      reason: "Explicit reward labeling identifies a mining-reward pathway; it does not establish the ultimate real-world source of funds.",
+    };
+  }
+
+  if (matchesKeywords(combinedText, ["binance", "coinbase", "kraken", "crypto.com", "okx", "kucoin", "bybit", "upbit", "bitget", "exchange", "hot wallet"])) {
+    return {
+      sourceType: "EXCHANGE",
+      confidence: "HIGH",
+      evidenceStatus: "CONFIRMED",
+      reviewRequired: false,
+      ownershipStatus: sourceOwnership?.status || "UNKNOWN",
+      reason: "The source counterparty matches an exchange or hot-wallet label, which is observable on-chain evidence of an exchange source.",
+    };
+  }
+
+  if (matchesKeywords(combinedText, ["uniswap", "sushiswap", "pancakeswap", "router", "swap", "dex", "amm", "defi"])) {
+    return {
+      sourceType: "DEX_DEFI",
+      confidence: "MEDIUM",
+      evidenceStatus: "PARTIAL",
+      reviewRequired: false,
+      ownershipStatus: sourceOwnership?.status || "UNKNOWN",
+      reason: "The source path includes a DEX/DeFi routing label or contract handoff, which is evidence of a DeFi source rather than a user-owned wallet.",
+    };
+  }
+
+  if (matchesKeywords(combinedText, ["bridge", "portal", "wormhole", "stargate", "axelar", "cross-chain"])) {
+    return {
+      sourceType: "BRIDGE",
+      confidence: "MEDIUM",
+      evidenceStatus: "PARTIAL",
+      reviewRequired: false,
+      ownershipStatus: sourceOwnership?.status || "UNKNOWN",
+      reason: "The observed counterparty is labeled as a bridge or cross-chain router, which indicates a bridge-mediated source path.",
+    };
+  }
+
+  if (matchesKeywords(combinedText, ["staking", "validator", "lido", "rocket pool", "stake"])) {
+    return {
+      sourceType: "STAKING_REWARD",
+      confidence: "MEDIUM",
+      evidenceStatus: "PARTIAL",
+      reviewRequired: false,
+      ownershipStatus: sourceOwnership?.status || "UNKNOWN",
+      reason: "The incoming funds are associated with a staking or validator label, which is consistent with a staking reward pathway.",
+    };
+  }
+
+  if (
+    sourceOwnership?.status === "VERIFIED" &&
+    destinationOwnership?.status === "VERIFIED" &&
+    sourceOwnership.ownerUserId &&
+    destinationOwnership.ownerUserId &&
+    sourceOwnership.ownerUserId !== destinationOwnership.ownerUserId
+  ) {
+    return {
+      sourceType: "EXTERNAL_WALLET",
+      confidence: "MEDIUM",
+      evidenceStatus: "PARTIAL",
+      reviewRequired: true,
+      ownershipStatus: "VERIFIED",
+      reason: "The funds arrived from a distinct external wallet that is not mapped to the user or an exchange label. This is an observable wallet source only, not ultimate real-world income.",
+    };
+  }
+
+  return {
+    sourceType: "UNKNOWN",
+    confidence: "LOW",
+    evidenceStatus: "REVIEW_REQUIRED",
+    reviewRequired: true,
+    ownershipStatus: sourceOwnership?.status || "UNKNOWN",
+    reason: "No reliable observable source label or wallet ownership evidence was available for this incoming transfer.",
+  };
+}
+
+function findFundingTrail({ walletAddress, rootWalletAddress, initialTransfer, transfers, walletOwnership = {}, labels = {}, maxHops = 2 }) {
+  const sourceAddress = normalizeAddress(walletAddress);
+  if (!sourceAddress) return [];
+
+  const seen = new Set();
+  const trail = [];
+  let current = sourceAddress;
+  let previousBlock = Number(initialTransfer?.blockNumber);
+  let previousHash = initialTransfer?.txHash || initialTransfer?.hash || null;
+  const root = normalizeAddress(rootWalletAddress);
+
+  for (let hop = 0; hop < maxHops; hop += 1) {
+    if (!current || seen.has(current)) break;
+    seen.add(current);
+    const candidate = dedupeTransferRecords(transfers)
+      .filter((transfer) => normalizeAddress(transfer?.toAddress || transfer?.to || transfer?.destinationWallet) === current)
+      .sort((a, b) => Number(b?.blockNumber || 0) - Number(a?.blockNumber || 0))
+      .find((transfer) => {
+        const fromAddress = normalizeAddress(transfer?.fromAddress || transfer?.from || transfer?.sourceWallet);
+        const toAddress = normalizeAddress(transfer?.toAddress || transfer?.to || transfer?.destinationWallet);
+        const blockNumber = Number(transfer?.blockNumber);
+        const hash = transfer?.txHash || transfer?.hash || transfer?.transactionHash || null;
+        return fromAddress && fromAddress !== current && fromAddress !== root && toAddress !== root &&
+          hash !== previousHash && Number.isFinite(blockNumber) && Number.isFinite(previousBlock) && blockNumber < previousBlock;
+      });
+
+    if (!candidate) break;
+
+    const priorSource = normalizeAddress(candidate.fromAddress || candidate.from || candidate.sourceWallet);
+    if (!priorSource) break;
+
+    const classification = classifyObservedSource({
+      sourceWallet: priorSource,
+      destinationWallet: current,
+      walletOwnership,
+      labels,
+      transfer: candidate,
+    });
+
+    trail.push({
+      sourceAddress: priorSource,
+      sourceTxHash: candidate.txHash || candidate.hash || candidate.transactionHash || null,
+      sourceType: classification.sourceType,
+      confidence: classification.confidence,
+      evidenceStatus: classification.evidenceStatus,
+      reviewRequired: classification.reviewRequired,
+      reason: classification.reason,
+    });
+    if (classification.sourceType === "UNKNOWN" || classification.reviewRequired) break;
+    previousBlock = Number(candidate.blockNumber);
+    previousHash = candidate.txHash || candidate.hash || candidate.transactionHash || null;
+    current = priorSource;
+  }
+
+  return trail;
+}
+
+export function traceSourceOfFunds({
+  walletAddress,
+  transfers = [],
+  walletOwnership = {},
+  labels = {},
+  dexEvents = [],
+  maxHops = 2,
+} = {}) {
+  const normalizedWallet = normalizeAddress(walletAddress);
+  if (!normalizedWallet) {
+    return {
+      wallet: null,
+      incomingTransfers: [],
+      overallStatus: "REVIEW_REQUIRED",
+      summary: { totalIncoming: 0, identified: 0, reviewRequired: 0 },
+      note: "Wallet address is missing or invalid; source-of-funds tracing cannot proceed.",
+    };
+  }
+
+  const incomingTransfers = dedupeTransferRecords(transfers)
+    .filter((transfer) => normalizeAddress(transfer?.toAddress || transfer?.to || transfer?.destinationWallet) === normalizedWallet)
+    .sort((a, b) => Number(b?.blockNumber || 0) - Number(a?.blockNumber || 0));
+
+  const results = incomingTransfers.map((transfer) => {
+    const sourceWallet = normalizeAddress(transfer?.fromAddress || transfer?.from || transfer?.sourceWallet);
+    const txHash = transfer?.txHash || transfer?.hash || transfer?.transactionHash || null;
+    const refId = transferRef(transfer);
+    const dexEvent = dexEvents.find((event) =>
+      (event.reconstruction?.sourceTransferRefs || []).includes(refId)
+    ) || null;
+    const classification = classifyObservedSource({
+      sourceWallet,
+      destinationWallet: normalizedWallet,
+      walletOwnership,
+      labels,
+      transfer,
+      dexEvent,
+    });
+    const hops = findFundingTrail({
+      walletAddress: sourceWallet,
+      rootWalletAddress: normalizedWallet,
+      initialTransfer: transfer,
+      transfers,
+      walletOwnership,
+      labels,
+      maxHops,
+    });
+    const unresolvedIntermediary = classification.sourceType === "EXTERNAL_WALLET" &&
+      (hops.length === 0 || hops.at(-1)?.sourceType === "UNKNOWN" || hops.at(-1)?.reviewRequired);
+
+    return {
+      sourceAddress: sourceWallet,
+      sourceTxHash: txHash,
+      sourceType: classification.sourceType,
+      confidence: classification.confidence,
+      evidenceStatus: unresolvedIntermediary ? "PARTIAL" : classification.evidenceStatus,
+      reviewRequired: classification.reviewRequired || unresolvedIntermediary,
+      reason: unresolvedIntermediary
+        ? `${classification.reason} Intermediary history is unavailable or unresolved, so the trace is partial.`
+        : classification.reason,
+      ownershipStatus: classification.ownershipStatus || (sourceWallet ? walletOwnership[sourceWallet]?.status || "UNKNOWN" : "UNKNOWN"),
+      ...(classification.ownershipTransferType ? { ownershipTransferType: classification.ownershipTransferType } : {}),
+      evidence: dexEvent
+        ? { reconstructedEventId: dexEvent.refId, transactionHash: dexEvent.txHash, verifiedByReceipt: dexEvent.reconstruction?.verifiedByReceipt === true }
+        : null,
+      hops,
+    };
+  });
+
+  const summary = {
+    totalIncoming: results.length,
+    identified: results.filter((result) => result.sourceType !== "UNKNOWN").length,
+    reviewRequired: results.filter((result) => result.reviewRequired).length,
+  };
+
+  return {
+    wallet: normalizedWallet,
+    incomingTransfers: results,
+    overallStatus: results.length === 0 || summary.reviewRequired > 0
+      ? "REVIEW_REQUIRED"
+      : "OBSERVABLE_SOURCE_IDENTIFIED",
+    summary,
+    note: "Source-of-funds classification is limited to observable on-chain evidence and does not identify ultimate real-world income sources.",
+  };
+}
 
 function getAlchemyRpcUrl() {
   const apiKey = process.env.ALCHEMY_ETH_API_KEY || "";
@@ -528,7 +865,7 @@ async function reconstructDexEvents(rootAddress, transfers, labels) {
   return candidates;
 }
 
-export async function analyzeEthereumWallet(address, { includeNormalizedRows = false } = {}) {
+export async function analyzeEthereumWallet(address, { includeNormalizedRows = false, ownershipContext = {} } = {}) {
   const rootAddress = address.trim();
   assertEthereumAddress(rootAddress);
   const [incoming, outgoing] = await Promise.all([
@@ -778,6 +1115,23 @@ export async function analyzeEthereumWallet(address, { includeNormalizedRows = f
     };
   });
 
+  const walletOwnership = buildWalletOwnershipMap({
+    userId: ownershipContext.userId || null,
+    caseWallets: [...(ownershipContext.caseWallets || []), rootAddress, ...flow.counterparties],
+    declaredWallets: ownershipContext.declaredWallets || [],
+    kycStatus: ownershipContext.kycStatus || null,
+    ownershipEvidence: [],
+    exchangeWalletMappings: [],
+    signatureEvidence: [],
+  });
+  const sourceOfFunds = traceSourceOfFunds({
+    walletAddress: rootAddress,
+    transfers,
+    walletOwnership,
+    labels,
+    dexEvents,
+  });
+
   return {
     chain: { id: ETH_MAINNET_CHAIN_ID, name: "Ethereum Mainnet" },
     wallet: rootAddress,
@@ -788,10 +1142,13 @@ export async function analyzeEthereumWallet(address, { includeNormalizedRows = f
     derivedLiquidityEvents: liquidityEvents,
     derivedLiquidityPositions: liquidityPositions,
     traceability,
+    walletOwnership,
+    sourceOfFunds,
     ...(includeNormalizedRows ? { normalizedRows } : {}),
     provenance: {
       ...flow,
       nodes,
+      walletOwnership,
       note: "Observable one-hop on-chain provenance. This does not prove ultimate real-world identity or ultimate source of funds.",
     },
     enrichment: {

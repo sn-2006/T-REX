@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { pool } from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
+import { buildWalletOwnershipMap } from "../../../src/utils/walletOwnership.js";
 
 const router = Router();
 
@@ -17,6 +18,13 @@ function rowToCase(row, transactions) {
         ? reconciliation.walletAnalyses
         : {};
 
+  const walletOwnership = buildWalletOwnershipMap({
+    userId: row.taxpayer_id || null,
+    caseWallets: Array.isArray(row.wallets) ? row.wallets : [],
+    declaredWallets: Array.isArray(row.wallets) ? row.wallets : [],
+    kycStatus: row.taxpayer_kyc_status || null,
+  });
+
   return {
     id: row.id,
     taxpayerId: row.taxpayer_external_id,
@@ -26,6 +34,7 @@ function rowToCase(row, transactions) {
     auditorId: row.auditor_external_id,
     exchanges: row.exchanges,
     wallets: row.wallets,
+    walletOwnership,
     allRows: transactions.map((t) => ({
       exchange: t.exchange,
       date: t.tx_date instanceof Date ? t.tx_date.toISOString().slice(0, 10) : String(t.tx_date).slice(0, 10),
@@ -63,7 +72,8 @@ function rowToCase(row, transactions) {
 
 const CASE_SELECT = `
   SELECT c.*, tp.external_id AS taxpayer_external_id, tp.name AS taxpayer_name,
-         tp.region AS taxpayer_region, au.external_id AS auditor_external_id
+         tp.region AS taxpayer_region, tp.kyc_status AS taxpayer_kyc_status,
+         au.external_id AS auditor_external_id
   FROM cases c
   JOIN users tp ON tp.id = c.taxpayer_id
   LEFT JOIN users au ON au.id = c.auditor_id
