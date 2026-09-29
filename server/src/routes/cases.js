@@ -64,6 +64,16 @@ function rowToCase(row, transactions) {
           verificationUrl: row.verification_url,
         }
       : null,
+    complianceCertificate: row.certificate_tx_hash
+      ? {
+          certId: row.certificate_id,
+          txHash: row.certificate_tx_hash,
+          blockNumber: row.certificate_block_number,
+          issuedAt: row.certificate_issued_at,
+          auditorAddress: row.certificate_auditor_address,
+          status: row.certificate_status,
+        }
+      : null,
     status: row.status,
     reviewNote: row.review_note,
     createdAt: row.created_at,
@@ -318,7 +328,7 @@ router.get("/:id", requireAuth, async (req, res) => {
 
 // PATCH /api/cases/:id/status — auditor approve/flag action.
 router.patch("/:id/status", requireAuth, requireRole("auditor"), async (req, res) => {
-  const { status, reviewNote } = req.body;
+  const { status, reviewNote, certificate } = req.body;
   if (!["verified", "flagged", "pending", "high-risk"].includes(status)) {
     return res.status(400).json({ error: "Invalid status." });
   }
@@ -349,11 +359,60 @@ router.patch("/:id/status", requireAuth, requireRole("auditor"), async (req, res
     return res.status(403).json({ error: "An active taxpayer authorization, required verified payment, and DEK release are required before review status changes." });
   }
 
+  const certId =
+    certificate?.certId && typeof certificate.certId === "string" && /^0x[a-f\d]{64}$/i.test(certificate.certId)
+      ? certificate.certId
+      : null;
+  const certTxHash =
+    certificate?.txHash && typeof certificate.txHash === "string" && /^0x[a-f\d]{64}$/i.test(certificate.txHash)
+      ? certificate.txHash
+      : null;
+  const certBlockNumber =
+    certificate?.blockNumber && /^\d+$/.test(String(certificate.blockNumber))
+      ? String(certificate.blockNumber)
+      : null;
+  const certIssuedAt =
+    certificate?.timestamp || certificate?.issuedAt
+      ? new Date(certificate.timestamp || certificate.issuedAt).toISOString()
+      : null;
+  const certAuditorAddress =
+    certificate?.auditorAddress && typeof certificate.auditorAddress === "string" && /^0x[a-f\d]{40}$/i.test(certificate.auditorAddress)
+      ? certificate.auditorAddress
+      : null;
+  const certStatus = certificate?.status !== undefined ? String(certificate.status) : null;
+
+  if (certificate && (!certTxHash || !certId)) {
+    return res.status(400).json({
+      error: "Invalid certificate metadata format. Valid 0x-prefixed 32-byte hexadecimal certId and txHash are required.",
+    });
+  }
+
   const result = await pool.query(
-    `UPDATE cases SET status = $1, review_note = COALESCE($2, review_note), reviewed_at = now(), auditor_id = COALESCE(auditor_id, $4)
+    `UPDATE cases SET
+       status = $1,
+       review_note = COALESCE($2, review_note),
+       reviewed_at = now(),
+       auditor_id = COALESCE(auditor_id, $4),
+       certificate_id = COALESCE($5, certificate_id),
+       certificate_tx_hash = COALESCE($6, certificate_tx_hash),
+       certificate_block_number = COALESCE($7::bigint, certificate_block_number),
+       certificate_issued_at = COALESCE($8::timestamptz, certificate_issued_at),
+       certificate_auditor_address = COALESCE($9, certificate_auditor_address),
+       certificate_status = COALESCE($10, certificate_status)
      WHERE id = $3
      RETURNING id`,
-    [status, reviewNote ?? null, req.params.id, req.user.id]
+    [
+      status,
+      reviewNote ?? null,
+      req.params.id,
+      req.user.id,
+      certId,
+      certTxHash,
+      certBlockNumber,
+      certIssuedAt,
+      certAuditorAddress,
+      certStatus,
+    ]
   );
   if (result.rows.length === 0) {
     return res.status(404).json({ error: "Case not found." });

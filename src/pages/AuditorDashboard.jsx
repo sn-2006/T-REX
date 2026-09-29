@@ -18,6 +18,11 @@ import {
   recordReportAccess,
   requestReportAccess,
 } from "../api/reportAccess.js";
+import {
+  isChainConfigured,
+  issueCertificateOnChain,
+  mockIssueCertificateOnChain,
+} from "../utils/blockchain.js";
 
 const TABS = [
   { key: "all", label: "All" },
@@ -113,9 +118,52 @@ export default function AuditorDashboard({ session, onLogout, initialView = "cas
   async function handleApprove(note) {
     if (!selected) return;
 
-    await updateCaseStatus(selected.id, "verified", note);
+    const reportHash = selected.reportHash || selected.id;
+    const taxpayerAddress =
+      Array.isArray(selected.wallets) && selected.wallets.length > 0
+        ? selected.wallets[0]
+        : null;
+
     setActionMessage(
-      `${selected.taxpayerName}'s case has been marked as verified.`
+      "Connecting BridgeKey wallet & issuing MST Compliance Certificate on-chain..."
+    );
+
+    let certResult;
+    try {
+      if (isChainConfigured) {
+        certResult = await issueCertificateOnChain({
+          reportHashHex: reportHash,
+          taxpayerAddress,
+          status: 1, // 1 = Verified
+          validUntil: 0,
+        });
+      } else {
+        const allowMock =
+          (typeof import.meta !== "undefined" && import.meta.env?.VITE_ALLOW_MOCK_CHAIN === "true") ||
+          process.env.VITE_ALLOW_MOCK_CHAIN === "true";
+        if (allowMock) {
+          certResult = mockIssueCertificateOnChain(reportHash);
+        } else {
+          throw new Error("MST Compliance Certificate contract is not configured (VITE_CONTRACT_ADDRESS is missing). On-chain certificate issuance cannot proceed.");
+        }
+      }
+    } catch (certError) {
+      console.error("MST Compliance Certificate issuance failed:", certError);
+      setActionMessage(
+        `❌ Compliance Certificate issuance failed: ${
+          certError.message || "Wallet transaction was rejected or failed."
+        } The case was NOT marked as verified.`
+      );
+      throw certError;
+    }
+
+    // ONLY AFTER the on-chain certificate transaction succeeds:
+    await updateCaseStatus(selected.id, "verified", note, certResult);
+    setActionMessage(
+      `✓ MST Compliance Certificate issued on-chain (Tx: ${certResult.txHash.slice(
+        0,
+        10
+      )}...). ${selected.taxpayerName}'s case has been marked as verified.`
     );
     refresh();
   }

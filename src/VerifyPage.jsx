@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { isChainConfigured, verifyReportOnChain } from "./utils/blockchain";
+import { isChainConfigured, verifyReportOnChain, verifyCertificateOnChain } from "./utils/blockchain";
 import { apiFetch } from "./api/client";
 
 export default function VerifyPage({ hash }) {
-  const [status, setStatus] = useState("checking"); // checking | verified | not-found | error
+  const [status, setStatus] = useState("checking"); // checking | verified | not-found | error | invalid-hash
   const [record, setRecord] = useState(null);
   const [errorMsg, setErrorMsg] = useState("");
 
@@ -11,16 +11,35 @@ export default function VerifyPage({ hash }) {
     let cancelled = false;
 
     async function check() {
+      if (!hash || hash.trim().length !== 64) {
+        setStatus("invalid-hash");
+        setErrorMsg("Invalid SHA-256 report hash format. Hash must be a 64-character hexadecimal string.");
+        return;
+      }
+
       if (isChainConfigured) {
         try {
-          const result = await verifyReportOnChain(hash);
+          const anchorResult = await verifyReportOnChain(hash);
+          let certResult = null;
+          let certError = null;
+
+          try {
+            certResult = await verifyCertificateOnChain(hash);
+          } catch (certErr) {
+            console.warn("On-chain certificate lookup failed:", certErr);
+            certError = certErr.message || "RPC lookup failure";
+          }
+
           if (cancelled) return;
-          if (result.found) {
+
+          if (anchorResult.found) {
             setRecord({
               reportHash: hash,
               network: "MST Testnet",
-              submitter: result.submitter,
-              timestamp: result.timestamp,
+              submitter: anchorResult.submitter,
+              timestamp: anchorResult.timestamp,
+              onChainCertificate: certResult,
+              certError,
             });
             setStatus("verified");
           } else {
@@ -28,18 +47,14 @@ export default function VerifyPage({ hash }) {
           }
         } catch (e) {
           if (!cancelled) {
-            setErrorMsg(e.message || "Couldn't reach the contract.");
+            setErrorMsg(e.message || "Couldn't reach the MST smart contract.");
             setStatus("error");
           }
         }
         return;
       }
 
-      // Fallback: no contract configured yet, check the database record
-      // instead — this is what makes verification work from any device,
-      // not just the browser that generated the report (localStorage
-      // couldn't do that). If the API itself is unreachable, fall back
-      // further to the local record so the flow stays demoable offline.
+      // Fallback: no contract configured yet, check database record
       try {
         const result = await apiFetch(`/verify/${encodeURIComponent(hash)}`, { auth: false });
         if (cancelled) return;
@@ -69,6 +84,14 @@ export default function VerifyPage({ hash }) {
     return () => { cancelled = true; };
   }, [hash]);
 
+  const cert = record?.onChainCertificate || (record?.complianceCertificate ? {
+    valid: true,
+    auditor: record.complianceCertificate.auditorAddress,
+    status: record.complianceCertificate.status,
+    issuedAt: record.complianceCertificate.issuedAt,
+    details: record.complianceCertificate,
+  } : null);
+
   return (
     <div className="app">
       <header className="app-header">
@@ -76,11 +99,11 @@ export default function VerifyPage({ hash }) {
       </header>
       <main className="app-main">
         <section className="card">
-          {status === "checking" && <p className="muted">Checking record...</p>}
+          {status === "checking" && <p className="muted">Checking record on MST Testnet...</p>}
 
           {status === "verified" && record && (
             <>
-              <h1>✓ Verified</h1>
+              <h1>✓ Verified Report Anchor</h1>
               <p className="muted">
                 {isChainConfigured
                   ? "This hash is anchored on the MST Testnet smart contract."
@@ -88,10 +111,48 @@ export default function VerifyPage({ hash }) {
               </p>
               <div className="kv"><span>SHA-256</span><code>{record.reportHash}</code></div>
               {record.network && <div className="kv"><span>Network</span><code>{record.network}</code></div>}
-              {record.txHash && <div className="kv"><span>Tx hash</span><code>{record.txHash}</code></div>}
+              {record.txHash && <div className="kv"><span>Anchor Tx hash</span><code>{record.txHash}</code></div>}
               {record.submitter && <div className="kv"><span>Submitted by</span><code>{record.submitter}</code></div>}
-              {record.blockNumber && <div className="kv"><span>Block</span><code>{record.blockNumber}</code></div>}
+              {record.blockNumber && <div className="kv"><span>Anchor Block</span><code>{record.blockNumber}</code></div>}
               {record.timestamp && <div className="kv"><span>Anchored at</span><code>{record.timestamp}</code></div>}
+
+              {/* MST Compliance Certificate Verification Display */}
+              <div style={{ marginTop: "24px", paddingTop: "20px", borderTop: "1px solid var(--line)" }}>
+                <h2 style={{ fontSize: "18px", margin: "0 0 12px 0" }}>MST Compliance Certificate</h2>
+
+                {record.certError ? (
+                  <div className="error" style={{ marginBottom: "12px" }}>
+                    ⚠️ Blockchain / RPC Verification Failure: Could not query certificate state ({record.certError}).
+                  </div>
+                ) : cert && cert.valid ? (
+                  <div style={{ padding: "16px", background: "rgba(0, 255, 128, 0.05)", border: "1px solid var(--green)", borderRadius: "8px" }}>
+                    <div style={{ color: "var(--green)", fontWeight: "bold", fontSize: "14px", marginBottom: "12px" }}>
+                      ✓ ACTIVE & VERIFIED COMPLIANCE CERTIFICATE
+                    </div>
+                    {cert.details?.certId && <div className="kv"><span>Cert ID</span><code>{cert.details.certId}</code></div>}
+                    {cert.auditor && <div className="kv"><span>Auditor Address</span><code>{cert.auditor}</code></div>}
+                    <div className="kv"><span>Certificate Status</span><code>{cert.status === 1 ? "1 (Verified)" : cert.status}</code></div>
+                    {cert.issuedAt && <div className="kv"><span>Issued At</span><code>{cert.issuedAt}</code></div>}
+                    {cert.validUntil && <div className="kv"><span>Valid Until</span><code>{cert.validUntil}</code></div>}
+                    {cert.details?.txHash && <div className="kv"><span>Cert Tx Hash</span><code>{cert.details.txHash}</code></div>}
+                    {cert.details?.blockNumber && <div className="kv"><span>Cert Block</span><code>{cert.details.blockNumber}</code></div>}
+                  </div>
+                ) : cert && cert.revoked ? (
+                  <div style={{ padding: "16px", background: "rgba(255, 0, 0, 0.05)", border: "1px solid #ff9b9b", borderRadius: "8px" }}>
+                    <div style={{ color: "#ff9b9b", fontWeight: "bold", fontSize: "14px", marginBottom: "12px" }}>
+                      ❌ COMPLIANCE CERTIFICATE REVOKED
+                    </div>
+                    {cert.auditor && <div className="kv"><span>Auditor Address</span><code>{cert.auditor}</code></div>}
+                    {cert.details?.revocationReason && (
+                      <div className="kv"><span>Revocation Reason</span><code>{cert.details.revocationReason}</code></div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="muted small" style={{ margin: 0 }}>
+                    No on-chain auditor compliance certificate has been issued for this report hash yet.
+                  </p>
+                )}
+              </div>
             </>
           )}
 
@@ -101,19 +162,26 @@ export default function VerifyPage({ hash }) {
               <p className="muted">
                 {isChainConfigured
                   ? "This hash hasn't been anchored on the contract."
-                  : "No report matching this hash was found on this device. Once VITE_CONTRACT_ADDRESS is set, this page checks the real MST Testnet contract instead — verifiable from any device."}
+                  : "No report matching this hash was found."}
               </p>
+            </>
+          )}
+
+          {status === "invalid-hash" && (
+            <>
+              <h1>Invalid Report Hash</h1>
+              <p className="muted">{errorMsg}</p>
             </>
           )}
 
           {status === "error" && (
             <>
               <h1>Couldn't verify</h1>
-              <p className="muted">{errorMsg}</p>
+              <p className="muted">⚠️ Blockchain / Network / RPC Failure: {errorMsg}</p>
             </>
           )}
 
-          <button className="link-btn" onClick={() => { window.location.hash = ""; }}>
+          <button className="link-btn" onClick={() => { window.location.hash = ""; }} style={{ marginTop: "24px" }}>
             Back to T-REX
           </button>
         </section>
@@ -121,3 +189,4 @@ export default function VerifyPage({ hash }) {
     </div>
   );
 }
+

@@ -8,7 +8,7 @@ import {
   buildCaseTransactionEvidence,
   resolveCaseWalletAnalyses,
 } from "../utils/evidenceBuilder";
-import { isChainConfigured, verifyReportOnChain } from "../utils/blockchain";
+import { isChainConfigured, verifyReportOnChain, verifyCertificateOnChain } from "../utils/blockchain";
 
 const STATUS_LABEL = {
   pending: "Pending review",
@@ -25,6 +25,8 @@ const STATUS_LABEL = {
 export default function CaseDetail({ case_, readOnly = false, onApprove, onFlag }) {
   const [verifyState, setVerifyState] = useState(null); // null | "checking" | result
   const [note, setNote] = useState(case_.reviewNote || "");
+  const [isIssuingCert, setIsIssuingCert] = useState(false);
+  const [certFeedback, setCertFeedback] = useState("");
 
   const { reconciliation, discrepancies, insights, narrative, allRows } = case_;
   const walletAnalyses = resolveCaseWalletAnalyses(case_);
@@ -33,8 +35,16 @@ export default function CaseDetail({ case_, readOnly = false, onApprove, onFlag 
     setVerifyState("checking");
     if (isChainConfigured) {
       try {
-        const result = await verifyReportOnChain(case_.reportHash);
-        setVerifyState(result.found ? { ok: true, ...result } : { ok: false });
+        const anchorResult = await verifyReportOnChain(case_.reportHash);
+        let certResult = null;
+        try {
+          certResult = await verifyCertificateOnChain(case_.reportHash);
+        } catch {}
+        setVerifyState(
+          anchorResult.found
+            ? { ok: true, ...anchorResult, cert: certResult }
+            : { ok: false }
+        );
       } catch (e) {
         setVerifyState({ ok: false, error: e.message });
       }
@@ -46,6 +56,20 @@ export default function CaseDetail({ case_, readOnly = false, onApprove, onFlag 
       setVerifyState(raw ? { ok: true, local: true, ...JSON.parse(raw) } : { ok: false });
     } catch {
       setVerifyState({ ok: false });
+    }
+  }
+
+  async function handleApproveClick() {
+    if (!onApprove) return;
+    setIsIssuingCert(true);
+    setCertFeedback("Connecting wallet & issuing MST Compliance Certificate on-chain...");
+    try {
+      await onApprove(note);
+      setCertFeedback("");
+    } catch (err) {
+      setCertFeedback(`❌ Certificate issuance failed: ${err.message || "Wallet transaction rejected."}`);
+    } finally {
+      setIsIssuingCert(false);
     }
   }
 
@@ -225,20 +249,42 @@ export default function CaseDetail({ case_, readOnly = false, onApprove, onFlag 
       {case_.anchor && (
         <>
           <div className="kv"><span>Network</span><code>{case_.anchor.network}</code></div>
-          <div className="kv"><span>Tx hash</span><code>{case_.anchor.txHash}</code></div>
+          <div className="kv"><span>Anchor Tx hash</span><code>{case_.anchor.txHash}</code></div>
         </>
       )}
-      <button className="secondary-btn" onClick={handleVerify} disabled={verifyState === "checking"}>
-        {verifyState === "checking" ? "Verifying..." : "Verify on-chain"}
-      </button>
+      {case_.complianceCertificate && (
+        <div style={{ marginTop: 12, padding: 12, border: "1px solid var(--line)", borderRadius: 6, background: "rgba(255, 255, 255, 0.02)" }}>
+          <strong style={{ fontSize: "13px" }}>MST Compliance Certificate Metadata</strong>
+          <div className="kv" style={{ marginTop: 6 }}><span>Cert ID</span><code>{case_.complianceCertificate.certId}</code></div>
+          <div className="kv"><span>Cert Tx hash</span><code>{case_.complianceCertificate.txHash}</code></div>
+          <div className="kv"><span>Auditor</span><code>{case_.complianceCertificate.auditorAddress}</code></div>
+          <div className="kv"><span>Issued at</span><code>{case_.complianceCertificate.issuedAt}</code></div>
+          <div className="kv"><span>Status</span><code>{case_.complianceCertificate.status === "1" ? "1 (Verified)" : case_.complianceCertificate.status}</code></div>
+        </div>
+      )}
+      <div style={{ marginTop: 12 }}>
+        <button className="secondary-btn" onClick={handleVerify} disabled={verifyState === "checking"}>
+          {verifyState === "checking" ? "Verifying..." : "Verify on-chain"}
+        </button>
+      </div>
       {verifyState && verifyState !== "checking" && (
-        <p className={`muted small verify-result ${verifyState.ok ? "verify-ok" : "verify-fail"}`}>
-          {verifyState.ok
-            ? verifyState.local
-              ? "✓ Matches the local mock record (no smart contract configured yet)."
-              : "✓ Confirmed on-chain."
-            : "✗ No matching anchor record found."}
-        </p>
+        <div style={{ marginTop: 10 }}>
+          {verifyState.ok ? (
+            verifyState.local ? (
+              <p className="muted small verify-result verify-ok">✓ Matches the local mock record (no smart contract configured yet).</p>
+            ) : verifyState.certError ? (
+              <p className="muted small verify-result verify-fail">⚠️ Report hash anchored on-chain, but certificate lookup failed ({verifyState.certError}).</p>
+            ) : verifyState.cert?.valid ? (
+              <p className="muted small verify-result verify-ok">✓ Live MST Contract: Compliance Certificate is ACTIVE & VERIFIED by Auditor ({verifyState.cert.auditor.slice(0, 10)}...).</p>
+            ) : verifyState.cert?.revoked ? (
+              <p className="muted small verify-result verify-fail">❌ Live MST Contract: Compliance Certificate was REVOKED ({verifyState.cert.details?.revocationReason || "Revoked"}).</p>
+            ) : (
+              <p className="muted small verify-result verify-ok">✓ Report hash anchored on-chain. (No on-chain auditor compliance certificate issued yet).</p>
+            )
+          ) : (
+            <p className="muted small verify-result verify-fail">✗ No matching anchor record found on MST smart contract.</p>
+          )}
+        </div>
       )}
 
       {!readOnly && (
@@ -249,17 +295,24 @@ export default function CaseDetail({ case_, readOnly = false, onApprove, onFlag 
             value={note}
             onChange={(e) => setNote(e.target.value)}
             rows={2}
+            disabled={isIssuingCert}
           />
           <div className="case-review-buttons">
-            <button className="primary-btn" onClick={() => onApprove?.(note)}>
-              Approve / verify
+            <button className="primary-btn" onClick={handleApproveClick} disabled={isIssuingCert}>
+              {isIssuingCert ? "Issuing Certificate..." : "Approve / verify"}
             </button>
-            <button className="secondary-btn danger-outline" onClick={() => onFlag?.(note)}>
+            <button className="secondary-btn danger-outline" onClick={() => onFlag?.(note)} disabled={isIssuingCert}>
               Flag for follow-up
             </button>
           </div>
+          {certFeedback && (
+            <p className="muted small" style={{ marginTop: 8, color: certFeedback.startsWith("❌") ? "#ff9b9b" : "var(--green)" }}>
+              {certFeedback}
+            </p>
+          )}
         </div>
       )}
     </div>
   );
 }
+

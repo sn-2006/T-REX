@@ -1,8 +1,6 @@
 import { withTransactionClassification } from "./transactionClassifier.js";
 import { withDeterminedConsideration } from "./consideration.js";
 import { SECTION_194S_RULES } from "../../../shared/taxRules.js";
-import { aggregate194sConsideration } from "../../../shared/194sAggregation.js";
-import { apply194sThresholdEligibility } from "../../../shared/194sThreshold.js";
 
 function finiteNumber(value) {
   if (value == null) return null;
@@ -95,17 +93,12 @@ export function computeTdsRows(allRows) {
         valuationStatus: "UNVERIFIED",
       };
 
-      const thresholdStatus = t.threshold_status;
-      const belowThreshold =
-        thresholdStatus === "BELOW_THRESHOLD" && t.is_194s_applicable === false;
-      const thresholdCrossed =
-        (thresholdStatus === "THRESHOLD_CROSSED" || thresholdStatus === "ALREADY_CROSSED") &&
-        t.is_194s_applicable === true;
-      const expectedTds = belowThreshold
-        ? 0
-        : thresholdCrossed && consideration.inrValue != null
-          ? Math.round(consideration.inrValue * SECTION_194S_RULES.tdsRate * 100) / 100
-          : null;
+      const expectedTds =
+  consideration.inrValue == null
+    ? null
+    : Math.round(
+        consideration.inrValue * SECTION_194S_RULES.tdsRate * 100
+      ) / 100;
 
       let reportedTds;
       let reportedSource;
@@ -174,16 +167,6 @@ export function computeTdsRows(allRows) {
         date: t.date,
         inrValue: consideration.inrValue,
         consideration,
-        previous_fy_consideration: t.previous_fy_consideration ?? null,
-        current_consideration: t.current_consideration ?? null,
-        cumulative_fy_consideration: t.cumulative_fy_consideration ?? null,
-        remaining_threshold_before_transaction: t.remaining_threshold_before_transaction ?? null,
-        threshold_exceeded_amount: t.threshold_exceeded_amount ?? null,
-        is_194s_applicable: t.is_194s_applicable ?? null,
-        threshold_amount: t.threshold_amount ?? null,
-        threshold_crossed: t.threshold_crossed ?? null,
-        threshold_status: t.threshold_status ?? "REVIEW_REQUIRED",
-        threshold_reason: t.threshold_reason ?? "Threshold eligibility has not been calculated.",
         expectedTds,
         reportedTds,
         difference,
@@ -201,7 +184,6 @@ export function computeTdsRows(allRows) {
       };
     });
 }
-
 export function analyzeRows(rows, context = {}) {
   const classifiedRows = rows.map(withTransactionClassification);
   const referenceCandidates = buildReferenceCandidates(classifiedRows);
@@ -209,24 +191,22 @@ export function analyzeRows(rows, context = {}) {
   const valuedRows = classifiedRows.map((row) =>
     withDeterminedConsideration(row, contextForRow(row, referenceCandidates))
   );
-  const aggregatedRows = aggregate194sConsideration(valuedRows, context);
-  const thresholdRows = apply194sThresholdEligibility(aggregatedRows);
 
-  const tdsRows = computeTdsRows(thresholdRows);
+  const tdsRows = computeTdsRows(valuedRows);
 
   return {
-    rows: thresholdRows,
+    rows: valuedRows,
     tdsRows,
     discrepancies: tdsRows.filter((r) => r.hasDiscrepancy),
     summary: {
-      totalRows: thresholdRows.length,
-      confirmedVdaTransfers: thresholdRows.filter(
+      totalRows: valuedRows.length,
+      confirmedVdaTransfers: valuedRows.filter(
         (r) => r.transactionClassification?.isVdaTransfer === true
       ).length,
-      nonTransfers: thresholdRows.filter(
+      nonTransfers: valuedRows.filter(
         (r) => r.transactionClassification?.isVdaTransfer === false
       ).length,
-      undetermined: thresholdRows.filter(
+      undetermined: valuedRows.filter(
         (r) => r.transactionClassification?.isVdaTransfer == null
       ).length,
       tdsRows: tdsRows.length,

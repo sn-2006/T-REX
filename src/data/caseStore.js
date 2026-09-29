@@ -89,10 +89,10 @@ export async function upsertCase(caseObj) {
   return restoreEncryptedCase(saved);
 }
 
-export async function updateCaseStatus(id, status, reviewNote) {
+export async function updateCaseStatus(id, status, reviewNote, certificate) {
   return apiFetch(`/cases/${encodeURIComponent(id)}/status`, {
     method: "PATCH",
-    body: { status, reviewNote },
+    body: { status, reviewNote, certificate },
   });
 }
 
