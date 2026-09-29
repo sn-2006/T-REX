@@ -75,5 +75,15 @@ export function toAuditorCaseMetadata(row) {
           verificationUrl: row.verification_url,
         }
       : null,
+    complianceCertificate: row.certificate_tx_hash
+      ? {
+          certId: row.certificate_id,
+          txHash: row.certificate_tx_hash,
+          blockNumber: row.certificate_block_number,
+          issuedAt: row.certificate_issued_at,
+          auditorAddress: row.certificate_auditor_address,
+          status: row.certificate_status,
+        }
+      : null,
   };
 }

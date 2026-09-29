@@ -10,7 +10,9 @@ const router = Router();
 router.get("/:hash", async (req, res) => {
   const result = await pool.query(
     `SELECT report_hash, anchor_network, anchor_tx_hash, anchor_block_number,
-            anchor_timestamp, verification_url, created_at
+            anchor_timestamp, verification_url, created_at,
+            certificate_id, certificate_tx_hash, certificate_block_number,
+            certificate_issued_at, certificate_auditor_address, certificate_status
      FROM cases WHERE report_hash = $1`,
     [req.params.hash]
   );
@@ -27,6 +29,16 @@ router.get("/:hash", async (req, res) => {
     txHash: row.anchor_tx_hash,
     blockNumber: row.anchor_block_number,
     timestamp: row.anchor_timestamp || row.created_at,
+    complianceCertificate: row.certificate_tx_hash
+      ? {
+          certId: row.certificate_id,
+          txHash: row.certificate_tx_hash,
+          blockNumber: row.certificate_block_number,
+          issuedAt: row.certificate_issued_at,
+          auditorAddress: row.certificate_auditor_address,
+          status: row.certificate_status,
+        }
+      : null,
   });
 });
 
