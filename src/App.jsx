@@ -231,6 +231,16 @@ if (route === "#/account" || route === "#/taxpayer/account") {
     );
   }
 
+  if (route === "#/auditor/security") {
+    if (!session || session.role !== "auditor") return <RedirectToLogin role="auditor" />;
+    return (
+      <div className="site">
+        <div className="grain" />
+        <AuditorDashboard session={session} onLogout={handleLogout} initialView="security" />
+      </div>
+    );
+  }
+
   if (route === "#/auditor") {
     if (!session || session.role !== "auditor") return <RedirectToLogin role="auditor" />;
     return (

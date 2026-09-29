@@ -3221,3 +3221,158 @@ p {
   border-radius: 12px;
 }
 
+/* ====================================================================== */
+/* AUDITOR SIMPLIFIED REPORT ACCESS FLOW                                  */
+/* ====================================================================== */
+
+.report-access-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 32px 16px;
+  width: 100%;
+}
+
+.report-lock-card {
+  width: 100%;
+  max-width: 540px;
+  background: rgba(20, 24, 20, 0.7);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 32px 28px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(8px);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.report-lock-card-header {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.report-lock-card-header h2 {
+  margin: 0;
+  font-size: 20px;
+  color: var(--paper);
+  font-weight: 600;
+}
+
+.report-hash-pill {
+  font-family: "DM Mono", monospace;
+  font-size: 11px;
+  color: var(--green);
+  background: rgba(124, 151, 116, 0.12);
+  border: 1px solid rgba(124, 151, 116, 0.3);
+  padding: 4px 10px;
+  border-radius: 20px;
+  letter-spacing: 0.5px;
+}
+
+.report-flow-stage {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.report-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 20px;
+  border-radius: 30px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.report-status-badge.locked {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: var(--paper);
+}
+
+.report-status-badge.requested {
+  background: rgba(220, 180, 70, 0.12);
+  border: 1px solid rgba(220, 180, 70, 0.35);
+  color: #f3cf7a;
+}
+
+.report-flow-prompt {
+  margin: 18px 0 24px;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.report-status-stack {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.report-step-pill {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px 20px;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.report-step-pill.success {
+  background: rgba(124, 151, 116, 0.14);
+  border: 1px solid rgba(124, 151, 116, 0.4);
+  color: #b7d6af;
+}
+
+.report-step-pill.pending {
+  background: rgba(220, 180, 70, 0.12);
+  border: 1px solid rgba(220, 180, 70, 0.35);
+  color: #f3cf7a;
+}
+
+.report-step-pill .pill-check {
+  color: var(--green);
+  font-weight: bold;
+}
+
+.view-report-btn {
+  padding: 12px 32px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  box-shadow: 0 4px 16px rgba(124, 151, 116, 0.25);
+}
+
+.integrity-verified-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: rgba(124, 151, 116, 0.15);
+  border: 1px solid rgba(124, 151, 116, 0.35);
+  border-radius: 6px;
+  color: #b7d6af;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 20px;
+}
+
+.integrity-verified-banner .icon {
+  font-weight: bold;
+  color: var(--green);
+}
