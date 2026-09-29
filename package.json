@@ -6,6 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "test:crypto": "node scripts/test-report-crypto.mjs",
+    "test:access": "node scripts/test-report-access.mjs",
+    "test:blockchain": "node scripts/test-mst-certificate-blockchain.mjs",
+    "test:persistence": "node scripts/test-mst-certificate-persistence.mjs",
     "lint": "oxlint",
     "preview": "vite preview"
   },

@@ -2,6 +2,7 @@ import { Router } from "express";
 import { pool } from "../db.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import { buildWalletOwnershipMap } from "../../../src/utils/walletOwnership.js";
+import { toAuditorCaseMetadata } from "../services/reportAccessPolicy.js";
 
 const router = Router();
 
@@ -51,6 +52,7 @@ function rowToCase(row, transactions) {
     discrepancies: row.discrepancies,
     insights: row.insights,
     narrative: row.narrative,
+    encryptedReport: row.encrypted_report || null,
     reportHash: row.report_hash,
     anchor: row.anchor_tx_hash
       ? {
@@ -60,6 +62,16 @@ function rowToCase(row, transactions) {
           timestamp: row.anchor_timestamp,
           reportHash: row.report_hash,
           verificationUrl: row.verification_url,
+        }
+      : null,
+    complianceCertificate: row.certificate_tx_hash
+      ? {
+          certId: row.certificate_id,
+          txHash: row.certificate_tx_hash,
+          blockNumber: row.certificate_block_number,
+          issuedAt: row.certificate_issued_at,
+          auditorAddress: row.certificate_auditor_address,
+          status: row.certificate_status,
         }
       : null,
     status: row.status,
@@ -117,69 +129,53 @@ router.post("/", requireAuth, requireRole("taxpayer"), async (req, res) => {
     });
   }
 
-  const {
-    id, // report hash, used as the case id
-    exchanges = [],
-    wallets = [],
-    allRows = [],
-    reconciliation,
-    discrepancies,
-    insights,
-    narrative,
-    reportHash,
-    anchor,
-    status,
-  } = req.body;
+  const { id, reportHash, anchor, status, encryptedReport } = req.body;
+  const hashIsValid = typeof reportHash === "string" && /^[a-f\d]{64}$/i.test(reportHash);
+  const envelopeIsValid =
+    encryptedReport?.version === 1 &&
+    encryptedReport?.cipher === "AES-256-GCM" &&
+    encryptedReport?.keyWrap === "RSA-OAEP-3072-SHA256" &&
+    encryptedReport?.reportHash === reportHash &&
+    typeof encryptedReport?.recipientKeyId === "string" &&
+    typeof encryptedReport?.iv === "string" &&
+    typeof encryptedReport?.ciphertext === "string" &&
+    typeof encryptedReport?.wrappedDek === "string";
 
-  if (!id || !reportHash || !reconciliation || !discrepancies || !insights) {
-    return res.status(400).json({ error: "Missing required report fields." });
+  if (!hashIsValid || id !== reportHash || !envelopeIsValid) {
+    return res.status(400).json({ error: "A valid encrypted report envelope and SHA-256 report hash are required." });
   }
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    const auditorId = null; // unassigned until an auditor accepts it
-
-    await client.query(
+    const result = await client.query(
       `INSERT INTO cases (
          id, taxpayer_id, auditor_id, exchanges, wallets,
-         reconciliation, discrepancies, insights, narrative, report_hash,
+         reconciliation, discrepancies, insights, narrative, report_hash, encrypted_report,
          anchor_network, anchor_tx_hash, anchor_block_number, anchor_timestamp, verification_url,
          status, review_note, is_demo
        ) VALUES (
-         $1, $2, $3, $4, $5,
-         $6, $7, $8, $9, $10,
-         $11, $12, $13, $14, $15,
-         $16, '', false
+         $1, $2, NULL, '{}', '{}',
+         '{}', '[]', '{}', NULL, $3, $4,
+         $5, $6, $7, $8, $9,
+         $10, '', false
        )
        ON CONFLICT (id) DO UPDATE SET
-         reconciliation = EXCLUDED.reconciliation,
-         discrepancies = EXCLUDED.discrepancies,
-         insights = EXCLUDED.insights,
-         narrative = EXCLUDED.narrative,
+         encrypted_report = EXCLUDED.encrypted_report,
          anchor_network = EXCLUDED.anchor_network,
          anchor_tx_hash = EXCLUDED.anchor_tx_hash,
          anchor_block_number = EXCLUDED.anchor_block_number,
          anchor_timestamp = EXCLUDED.anchor_timestamp,
          verification_url = EXCLUDED.verification_url,
-         status = EXCLUDED.status`,
+         status = EXCLUDED.status
+       WHERE cases.taxpayer_id = EXCLUDED.taxpayer_id
+       RETURNING id`,
       [
         id,
         req.user.id,
-        auditorId,
-        exchanges,
-        wallets,
-        // node-postgres converts raw JS arrays to Postgres array-literal
-        // syntax ("{}"), not JSON — which a jsonb column then happily
-        // parses as an empty OBJECT, silently corrupting `discrepancies`
-        // (a top-level array) into `{}`. Stringify every jsonb field
-        // explicitly so it's unambiguous JSON on the wire.
-        JSON.stringify(reconciliation),
-        JSON.stringify(discrepancies),
-        JSON.stringify(insights),
-        narrative || null,
         reportHash,
+        JSON.stringify(encryptedReport),
         anchor?.network || null,
         anchor?.txHash || null,
         anchor?.blockNumber || null,
@@ -188,19 +184,13 @@ router.post("/", requireAuth, requireRole("taxpayer"), async (req, res) => {
         status || "pending",
       ]
     );
-
-    // Replace this case's transaction rows wholesale — simplest correct
-    // behavior for the "regenerate a report" case, and cheap since a report
-    // is at most a few hundred rows.
-    await client.query("DELETE FROM transactions WHERE case_id = $1", [id]);
-    for (const r of allRows) {
-      await client.query(
-        `INSERT INTO transactions (case_id, exchange, tx_date, type, asset, amount, inr_value, tds_status, tds_amount, ref_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-         ON CONFLICT (case_id, ref_id) DO NOTHING`,
-        [id, r.exchange, r.date, r.type, r.asset, r.amount, r.inrValue, r.tdsStatus, r.tdsAmount ?? null, r.refId]
-      );
+    if (!result.rowCount) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "A report with this hash belongs to another taxpayer." });
     }
+
+    // New cases keep normalized transaction data inside encrypted_report only.
+    await client.query("DELETE FROM transactions WHERE case_id = $1", [id]);
 
     await client.query("COMMIT");
 
@@ -232,7 +222,7 @@ router.get("/assigned", requireAuth, requireRole("auditor"), async (req, res) =>
      ORDER BY c.created_at DESC`,
     [req.user.id]
   );
-  res.json(await attachTransactions(result.rows));
+  res.json(result.rows.map(toAuditorCaseMetadata));
 });
 
 // GET /api/cases/unassigned — taxpayer clients waiting for any auditor to
@@ -242,7 +232,7 @@ router.get("/unassigned", requireAuth, requireRole("auditor"), async (req, res) 
   const result = await pool.query(
     `${CASE_SELECT} WHERE c.auditor_id IS NULL ORDER BY c.created_at ASC`
   );
-  res.json(await attachTransactions(result.rows));
+  res.json(result.rows.map(toAuditorCaseMetadata));
 });
 
 // POST /api/cases/:id/accept — an auditor accepts an unassigned client's
@@ -260,8 +250,8 @@ router.post("/:id/accept", requireAuth, requireRole("auditor"), async (req, res)
   }
   const client = await pool.connect();
   try {
-    const updated = await loadCaseWithTransactions(client, req.params.id);
-    res.json(updated);
+    const updated = await client.query(`${CASE_SELECT} WHERE c.id = $1`, [req.params.id]);
+    res.json(toAuditorCaseMetadata(updated.rows[0]));
   } finally {
     client.release();
   }
@@ -328,13 +318,17 @@ router.get("/:id", requireAuth, async (req, res) => {
 
   if (!owns) return res.status(403).json({ error: "You don't have access to this case." });
 
+  if (req.user.role === "auditor") {
+    return res.json(toAuditorCaseMetadata(row));
+  }
+
   const [c] = await attachTransactions([row]);
   res.json(c);
 });
 
 // PATCH /api/cases/:id/status — auditor approve/flag action.
 router.patch("/:id/status", requireAuth, requireRole("auditor"), async (req, res) => {
-  const { status, reviewNote } = req.body;
+  const { status, reviewNote, certificate } = req.body;
   if (!["verified", "flagged", "pending", "high-risk"].includes(status)) {
     return res.status(400).json({ error: "Invalid status." });
   }
@@ -348,11 +342,77 @@ router.patch("/:id/status", requireAuth, requireRole("auditor"), async (req, res
     return res.status(404).json({ error: "Case not found or taxpayer not assigned to you." });
   }
 
+  const releaseAccess = await pool.query(
+    `SELECT 1 FROM report_access_grants
+     WHERE case_id = $1 AND auditor_id = $2 AND authorization_status = 'approved'
+       AND wrapped_dek IS NOT NULL
+       AND EXISTS (
+         SELECT 1 FROM auditor_public_keys apk
+         WHERE apk.key_id = report_access_grants.wrapped_dek_key_id
+           AND apk.auditor_id = $2 AND apk.is_active = true
+           AND apk.certificate_valid_until > now()
+       )
+       AND ($3::boolean = false OR payment_status = 'verified')`,
+    [req.params.id, req.user.id, process.env.REPORT_ACCESS_PAYMENT_REQUIRED !== "false"]
+  );
+  if (!releaseAccess.rowCount) {
+    return res.status(403).json({ error: "An active taxpayer authorization, required verified payment, and DEK release are required before review status changes." });
+  }
+
+  const certId =
+    certificate?.certId && typeof certificate.certId === "string" && /^0x[a-f\d]{64}$/i.test(certificate.certId)
+      ? certificate.certId
+      : null;
+  const certTxHash =
+    certificate?.txHash && typeof certificate.txHash === "string" && /^0x[a-f\d]{64}$/i.test(certificate.txHash)
+      ? certificate.txHash
+      : null;
+  const certBlockNumber =
+    certificate?.blockNumber && /^\d+$/.test(String(certificate.blockNumber))
+      ? String(certificate.blockNumber)
+      : null;
+  const certIssuedAt =
+    certificate?.timestamp || certificate?.issuedAt
+      ? new Date(certificate.timestamp || certificate.issuedAt).toISOString()
+      : null;
+  const certAuditorAddress =
+    certificate?.auditorAddress && typeof certificate.auditorAddress === "string" && /^0x[a-f\d]{40}$/i.test(certificate.auditorAddress)
+      ? certificate.auditorAddress
+      : null;
+  const certStatus = certificate?.status !== undefined ? String(certificate.status) : null;
+
+  if (certificate && (!certTxHash || !certId)) {
+    return res.status(400).json({
+      error: "Invalid certificate metadata format. Valid 0x-prefixed 32-byte hexadecimal certId and txHash are required.",
+    });
+  }
+
   const result = await pool.query(
-    `UPDATE cases SET status = $1, review_note = COALESCE($2, review_note), reviewed_at = now(), auditor_id = COALESCE(auditor_id, $4)
+    `UPDATE cases SET
+       status = $1,
+       review_note = COALESCE($2, review_note),
+       reviewed_at = now(),
+       auditor_id = COALESCE(auditor_id, $4),
+       certificate_id = COALESCE($5, certificate_id),
+       certificate_tx_hash = COALESCE($6, certificate_tx_hash),
+       certificate_block_number = COALESCE($7::bigint, certificate_block_number),
+       certificate_issued_at = COALESCE($8::timestamptz, certificate_issued_at),
+       certificate_auditor_address = COALESCE($9, certificate_auditor_address),
+       certificate_status = COALESCE($10, certificate_status)
      WHERE id = $3
      RETURNING id`,
-    [status, reviewNote ?? null, req.params.id, req.user.id]
+    [
+      status,
+      reviewNote ?? null,
+      req.params.id,
+      req.user.id,
+      certId,
+      certTxHash,
+      certBlockNumber,
+      certIssuedAt,
+      certAuditorAddress,
+      certStatus,
+    ]
   );
   if (result.rows.length === 0) {
     return res.status(404).json({ error: "Case not found." });
@@ -360,8 +420,8 @@ router.patch("/:id/status", requireAuth, requireRole("auditor"), async (req, res
 
   const client = await pool.connect();
   try {
-    const updated = await loadCaseWithTransactions(client, req.params.id);
-    res.json(updated);
+    const updated = await client.query(`${CASE_SELECT} WHERE c.id = $1`, [req.params.id]);
+    res.json(toAuditorCaseMetadata(updated.rows[0]));
   } finally {
     client.release();
   }

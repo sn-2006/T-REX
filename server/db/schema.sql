@@ -52,6 +52,18 @@ CREATE TABLE users (
   UNIQUE (role, external_id)
 );
 
+CREATE TABLE IF NOT EXISTS auditor_public_keys (
+  key_id                 TEXT PRIMARY KEY,
+  auditor_id             UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  public_key_spki        TEXT NOT NULL,
+  certificate_pem        TEXT NOT NULL,
+  certificate_fingerprint TEXT NOT NULL,
+  certificate_valid_until TIMESTAMPTZ NOT NULL,
+  is_active              BOOLEAN NOT NULL DEFAULT true,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (auditor_id, key_id)
+);
+
 -- If you already have a running database from before these columns existed:
 --   ALTER TABLE users ADD COLUMN region TEXT;
 --   ALTER TABLE users ADD COLUMN email TEXT;
@@ -111,17 +123,61 @@ CREATE TABLE cases (
   insights             JSONB NOT NULL,   -- buildComplianceInsights() output
   narrative            TEXT,             -- AI-generated plain-language report
   report_hash          TEXT NOT NULL,    -- same value as `id`, kept as its own column for clarity/joins
+  encrypted_report     JSONB,             -- new reports are stored as an authenticated ciphertext envelope
   anchor_network       TEXT,
   anchor_tx_hash       TEXT,
   anchor_block_number  BIGINT,
   anchor_timestamp     TIMESTAMPTZ,
   verification_url     TEXT,
+  certificate_id       TEXT,
+  certificate_tx_hash  TEXT,
+  certificate_block_number BIGINT,
+  certificate_issued_at TIMESTAMPTZ,
+  certificate_auditor_address TEXT,
+  certificate_status   TEXT,
   status               case_status NOT NULL DEFAULT 'pending',
   review_note          TEXT NOT NULL DEFAULT '',
   is_demo              BOOLEAN NOT NULL DEFAULT false,
   created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
   reviewed_at          TIMESTAMPTZ
 );
+
+CREATE TABLE IF NOT EXISTS report_access_grants (
+  id                         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id                    TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+  taxpayer_id                UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  auditor_id                 UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  authorization_status       TEXT NOT NULL DEFAULT 'pending'
+                               CHECK (authorization_status IN ('pending', 'approved', 'revoked')),
+  authorized_at              TIMESTAMPTZ,
+  revoked_at                 TIMESTAMPTZ,
+  payment_status             TEXT NOT NULL DEFAULT 'pending'
+                               CHECK (payment_status IN ('pending', 'verified', 'failed')),
+  payment_reference          TEXT UNIQUE,
+  payment_provider           TEXT,
+  payment_event_id           TEXT UNIQUE,
+  payment_amount_minor       BIGINT,
+  payment_currency           TEXT,
+  payment_verified_at        TIMESTAMPTZ,
+  wrapped_dek                TEXT,
+  wrapped_dek_key_id         TEXT REFERENCES auditor_public_keys(key_id) ON DELETE SET NULL,
+  wrapped_dek_released_at    TIMESTAMPTZ,
+  release_challenge_hash     TEXT,
+  release_challenge_expires  TIMESTAMPTZ,
+  created_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (case_id, auditor_id)
+);
+
+CREATE TABLE IF NOT EXISTS security_audit_events (
+  id            BIGSERIAL PRIMARY KEY,
+  actor_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  case_id       TEXT REFERENCES cases(id) ON DELETE SET NULL,
+  auditor_id    UUID REFERENCES users(id) ON DELETE SET NULL,
+  event_type    TEXT NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_security_audit_case ON security_audit_events(case_id, created_at);
 
 -- ---------------------------------------------------------------------------
 -- transactions — the normalized rows behind `allRows` (parsed CSV rows +

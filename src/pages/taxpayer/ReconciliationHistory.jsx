@@ -2,6 +2,19 @@ import { useEffect, useState } from "react";
 import { apiFetch } from "../../api/client";
 import { casesForTaxpayer } from "../../data/caseStore";
 import DashboardHeader from "../../components/DashboardHeader";
+import {
+  authorizeReportAccess,
+  createReportPaymentRequest,
+  getReportAccessStatus,
+  getReportReleaseContext,
+  revokeReportAccess,
+  submitWrappedReportDek,
+} from "../../api/reportAccess.js";
+import {
+  getClientKeyPairById,
+  importAuditorPublicKey,
+  wrapReportDekForAuditor,
+} from "../../utils/reportCrypto.js";
 
 export default function ReconciliationHistory({ session, onLogout }) {
   const [cases, setCases] = useState([]);
@@ -12,6 +25,14 @@ export default function ReconciliationHistory({ session, onLogout }) {
   const [selectedAuditor, setSelectedAuditor] = useState("");
   const [verifySending, setVerifySending] = useState(false);
   const [verifyError, setVerifyError] = useState("");
+  const [accessStatuses, setAccessStatuses] = useState({});
+  const [accessMessages, setAccessMessages] = useState({});
+
+  async function refreshAccessStatus(caseId) {
+    const status = await getReportAccessStatus(caseId);
+    setAccessStatuses((current) => ({ ...current, [caseId]: status }));
+    return status;
+  }
 
   useEffect(() => {
     async function fetchAuditors() {
@@ -31,6 +52,14 @@ export default function ReconciliationHistory({ session, onLogout }) {
       try {
         const data = await casesForTaxpayer();
         setCases(data);
+        const statuses = await Promise.all(data.map(async (item) => {
+          try {
+            return [item.id, await getReportAccessStatus(item.id)];
+          } catch {
+            return [item.id, null];
+          }
+        }));
+        setAccessStatuses(Object.fromEntries(statuses));
       } catch (err) {
         setError(err.message || "Couldn't load reconciliation history.");
       } finally {
@@ -39,6 +68,43 @@ export default function ReconciliationHistory({ session, onLogout }) {
     }
     load();
   }, []);
+
+  async function handleAccessAction(caseId, action) {
+    const status = accessStatuses[caseId];
+    if (!status?.auditor?.id) return;
+    setAccessMessages((current) => ({ ...current, [caseId]: "Updating access state..." }));
+    try {
+      let result;
+      if (action === "authorize") result = await authorizeReportAccess(caseId, status.auditor.id);
+      if (action === "revoke") result = await revokeReportAccess(caseId, status.auditor.id);
+      if (action === "payment") result = await createReportPaymentRequest(caseId);
+      if (action === "release") {
+        const reportCase = cases.find((item) => item.id === caseId);
+        if (!reportCase?.encryptedReport) throw new Error("Encrypted report metadata is unavailable.");
+        const context = await getReportReleaseContext(caseId, status.auditor.id);
+        const taxpayerKey = await getClientKeyPairById(reportCase.encryptedReport.recipientKeyId);
+        const auditorPublicKey = await importAuditorPublicKey(context.publicKeySpki);
+        const wrappedRelease = await wrapReportDekForAuditor({
+          encryptedReport: reportCase.encryptedReport,
+          taxpayerPrivateKey: taxpayerKey.privateKey,
+          auditorPublicKey,
+          auditorKeyId: context.auditorKeyId,
+        });
+        result = await submitWrappedReportDek(caseId, status.auditor.id, {
+          permit: context.permit,
+          auditorKeyId: wrappedRelease.auditorKeyId,
+          wrappedDek: wrappedRelease.wrappedDek,
+        });
+      }
+      await refreshAccessStatus(caseId);
+      setAccessMessages((current) => ({
+        ...current,
+        [caseId]: result?.message || "Access state updated.",
+      }));
+    } catch (err) {
+      setAccessMessages((current) => ({ ...current, [caseId]: err.message || "Could not update access state." }));
+    }
+  }
 
   return (
     <div className="app app-wide">
@@ -121,6 +187,47 @@ export default function ReconciliationHistory({ session, onLogout }) {
                   </div>
                 </div>
 
+                <div style={{ marginTop: "16px", padding: "12px", border: "1px solid var(--line)", borderRadius: "6px" }}>
+                  <strong>Auditor access</strong>
+                  <div className="muted small" style={{ marginTop: "8px", display: "grid", gap: "4px" }}>
+                    <span>Auditor request: {accessStatuses[c.id]?.auditorRequest || (c.auditorId ? "Assigned" : "Not requested")}</span>
+                    <span>Payment: {accessStatuses[c.id]?.payment || "Pending"}</span>
+                    <span>Authorization: {accessStatuses[c.id]?.authorization || "Pending"}</span>
+                    {accessStatuses[c.id]?.auditor?.name && <span>Auditor: {accessStatuses[c.id].auditor.name}</span>}
+                  </div>
+                  {accessStatuses[c.id]?.auditor && accessStatuses[c.id]?.auditorRequest === "Accepted" && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "10px" }}>
+                      {accessStatuses[c.id].authorization !== "approved" && (
+                        <button className="secondary-btn" onClick={() => handleAccessAction(c.id, "authorize")}>
+                          Authorize report access
+                        </button>
+                      )}
+                      {accessStatuses[c.id].authorization === "approved" && accessStatuses[c.id].payment === "pending" && (
+                        <button className="secondary-btn" onClick={() => handleAccessAction(c.id, "payment")}>
+                          Create payment request
+                        </button>
+                      )}
+                      {accessStatuses[c.id].authorization === "approved" &&
+                        accessStatuses[c.id].certificate === "Verified" &&
+                        ["verified", "not_required"].includes(accessStatuses[c.id].payment) &&
+                        accessStatuses[c.id].report === "Locked" && (
+                          <button className="primary-btn" onClick={() => handleAccessAction(c.id, "release")}>
+                            Release report key to auditor
+                          </button>
+                        )}
+                      <button className="secondary-btn" onClick={() => refreshAccessStatus(c.id)}>
+                        Refresh status
+                      </button>
+                      {accessStatuses[c.id].authorization === "approved" && (
+                        <button className="secondary-btn danger" onClick={() => handleAccessAction(c.id, "revoke")}>
+                          Revoke access
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {accessMessages[c.id] && <p className="muted small" role="status">{accessMessages[c.id]}</p>}
+                </div>
+
                 <div style={{ marginTop: "16px", paddingTop: "16px", borderTop: "1px solid var(--line)", display: "flex", justifyContent: "flex-end", gap: "8px" }}>
                   <button
                     className="secondary-btn"
@@ -188,6 +295,7 @@ export default function ReconciliationHistory({ session, onLogout }) {
                     // Reload cases to reflect status update
                     const data = await casesForTaxpayer();
                     setCases(data);
+                    await refreshAccessStatus(verifyingCase);
                   } catch (err) {
                     setVerifyError(err.message);
                   } finally {

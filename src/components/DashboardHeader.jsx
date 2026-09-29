@@ -188,6 +188,9 @@ export default function DashboardHeader({ session, roleLabel, onLogout, children
                   <button onClick={() => { setIsSidebarOpen(false); window.location.hash = "#/auditor"; }}>
                     REPORT HISTORY
                   </button>
+                  <button onClick={() => { setIsSidebarOpen(false); window.location.hash = "#/auditor/security"; }}>
+                    SECURITY SETTINGS
+                  </button>
                 </>
               )}
               <button onClick={() => { setIsSidebarOpen(false); window.location.hash = "#/account"; }}>
