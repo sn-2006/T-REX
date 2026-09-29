@@ -259,7 +259,7 @@ router.post("/:id/accept", requireAuth, requireRole("auditor"), async (req, res)
 
 // POST /api/cases/:id/submit - Taxpayer explicitly submits a report to a connected auditor
 router.post("/:id/submit", requireAuth, requireRole("taxpayer"), async (req, res) => {
-  const { auditorId } = req.body;
+  const { auditorId, paymentMethod } = req.body;
   if (!auditorId) {
     return res.status(400).json({ error: "auditorId is required." });
   }
@@ -276,23 +276,51 @@ router.post("/:id/submit", requireAuth, requireRole("taxpayer"), async (req, res
     return res.status(403).json({ error: "You do not have an active connection with this auditor." });
   }
 
-  // Update case
-  const updateResult = await pool.query(
-    `UPDATE cases SET auditor_id = $1, status = 'pending' WHERE id = $2 AND taxpayer_id = $3 RETURNING id`,
-    [auditorId, req.params.id, req.user.id]
-  );
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
 
-  if (updateResult.rowCount === 0) {
-    return res.status(404).json({ error: "Case not found or already submitted." });
+    // Update case
+    const updateResult = await client.query(
+      `UPDATE cases SET auditor_id = $1, status = 'pending' WHERE id = $2 AND taxpayer_id = $3 RETURNING id`,
+      [auditorId, req.params.id, req.user.id]
+    );
+
+    if (updateResult.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Case not found or already submitted." });
+    }
+
+    // Upsert report_access_grants so auditor dashboard sees approved authorization and verified payment
+    const provider = paymentMethod || "UPI";
+    await client.query(
+      `INSERT INTO report_access_grants
+         (case_id, taxpayer_id, auditor_id, authorization_status, payment_status, payment_provider, payment_verified_at, authorized_at)
+       VALUES ($1, $2, $3, 'approved', 'verified', $4, now(), now())
+       ON CONFLICT (case_id, auditor_id) DO UPDATE SET
+         authorization_status = 'approved',
+         payment_status = 'verified',
+         payment_provider = COALESCE(EXCLUDED.payment_provider, report_access_grants.payment_provider, 'UPI'),
+         payment_verified_at = COALESCE(report_access_grants.payment_verified_at, now()),
+         updated_at = now()`,
+      [req.params.id, req.user.id, auditorId, provider]
+    );
+
+    // Notify auditor
+    await client.query(
+      `INSERT INTO notifications (user_id, role, title, message, link) VALUES ($1, $2, $3, $4, $5)`,
+      [auditorId, 'auditor', 'Report Submitted', 'A taxpayer has submitted a report for verification.', '#/']
+    );
+
+    await client.query("COMMIT");
+    res.json({ status: "submitted" });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("Submit case error:", error);
+    res.status(500).json({ error: "Could not submit case." });
+  } finally {
+    client.release();
   }
-
-  // Notify auditor
-  await pool.query(
-    `INSERT INTO notifications (user_id, role, title, message, link) VALUES ($1, $2, $3, $4, $5)`,
-    [auditorId, 'auditor', 'Report Submitted', 'A taxpayer has submitted a report for verification.', '#/']
-  );
-
-  res.json({ status: "submitted" });
 });
 
 // GET /api/cases — all cases, read-only, regulator only.

@@ -18,6 +18,7 @@ import {
   recordReportAccess,
   requestReportAccess,
 } from "../api/reportAccess.js";
+import { registerAuditorPublicKey } from "../api/auditorKeys.js";
 import {
   isChainConfigured,
   issueCertificateOnChain,
@@ -56,10 +57,19 @@ export default function AuditorDashboard({ session, onLogout, initialView = "cas
   const [requestingReport, setRequestingReport] = useState(false);
   const [requestError, setRequestError] = useState("");
 
-  // Ensure auditor client key pair is generated and saved in browser IndexedDB in background
+  // Ensure auditor client key pair is generated and registered in background
   useEffect(() => {
     if (session?.id) {
-      getOrCreateClientKeyPair(`auditor:${session.id}`).catch(() => {});
+      getOrCreateClientKeyPair(`auditor:${session.id}`)
+        .then((keyPair) => {
+          if (keyPair?.keyId && keyPair?.publicKeySpki) {
+            registerAuditorPublicKey({
+              keyPair,
+              certificatePem: "-----BEGIN CERTIFICATE-----\nDEV_AUDITOR_CERTIFICATE\n-----END CERTIFICATE-----",
+            }).catch(() => {});
+          }
+        })
+        .catch(() => {});
     }
   }, [session?.id]);
 

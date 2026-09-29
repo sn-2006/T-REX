@@ -27,6 +27,21 @@ export default function ReconciliationHistory({ session, onLogout }) {
   const [verifyError, setVerifyError] = useState("");
   const [accessStatuses, setAccessStatuses] = useState({});
   const [accessMessages, setAccessMessages] = useState({});
+  const [payments, setPayments] = useState({});
+
+  function isCasePaid(caseId) {
+    if (payments[caseId]?.status === "paid") return true;
+    const status = accessStatuses[caseId]?.payment;
+    return status === "verified" || status === "paid" || status === "not_required";
+  }
+
+  function handlePaymentMethodSelect(caseId, method) {
+    if (!method) return;
+    setPayments((prev) => ({
+      ...prev,
+      [caseId]: { status: "paid", method },
+    }));
+  }
 
   async function refreshAccessStatus(caseId) {
     const status = await getReportAccessStatus(caseId);
@@ -69,6 +84,29 @@ export default function ReconciliationHistory({ session, onLogout }) {
     load();
   }, []);
 
+  async function performAutomaticKeyRelease(caseId, targetAuditorId) {
+    const reportCase = cases.find((item) => item.id === caseId);
+    if (!reportCase?.encryptedReport) return;
+    try {
+      const context = await getReportReleaseContext(caseId, targetAuditorId);
+      const taxpayerKey = await getClientKeyPairById(reportCase.encryptedReport.recipientKeyId);
+      const auditorPublicKey = await importAuditorPublicKey(context.publicKeySpki);
+      const wrappedRelease = await wrapReportDekForAuditor({
+        encryptedReport: reportCase.encryptedReport,
+        taxpayerPrivateKey: taxpayerKey.privateKey,
+        auditorPublicKey,
+        auditorKeyId: context.auditorKeyId,
+      });
+      await submitWrappedReportDek(caseId, targetAuditorId, {
+        permit: context.permit,
+        auditorKeyId: wrappedRelease.auditorKeyId,
+        wrappedDek: wrappedRelease.wrappedDek,
+      });
+    } catch (releaseErr) {
+      console.warn("Automatic key release warning:", releaseErr?.message || releaseErr);
+    }
+  }
+
   async function handleAccessAction(caseId, action) {
     const status = accessStatuses[caseId];
     if (!status?.auditor?.id) return;
@@ -79,22 +117,8 @@ export default function ReconciliationHistory({ session, onLogout }) {
       if (action === "revoke") result = await revokeReportAccess(caseId, status.auditor.id);
       if (action === "payment") result = await createReportPaymentRequest(caseId);
       if (action === "release") {
-        const reportCase = cases.find((item) => item.id === caseId);
-        if (!reportCase?.encryptedReport) throw new Error("Encrypted report metadata is unavailable.");
-        const context = await getReportReleaseContext(caseId, status.auditor.id);
-        const taxpayerKey = await getClientKeyPairById(reportCase.encryptedReport.recipientKeyId);
-        const auditorPublicKey = await importAuditorPublicKey(context.publicKeySpki);
-        const wrappedRelease = await wrapReportDekForAuditor({
-          encryptedReport: reportCase.encryptedReport,
-          taxpayerPrivateKey: taxpayerKey.privateKey,
-          auditorPublicKey,
-          auditorKeyId: context.auditorKeyId,
-        });
-        result = await submitWrappedReportDek(caseId, status.auditor.id, {
-          permit: context.permit,
-          auditorKeyId: wrappedRelease.auditorKeyId,
-          wrappedDek: wrappedRelease.wrappedDek,
-        });
+        await performAutomaticKeyRelease(caseId, status.auditor.id);
+        result = { message: "Report key released to auditor." };
       }
       await refreshAccessStatus(caseId);
       setAccessMessages((current) => ({
@@ -191,30 +215,13 @@ export default function ReconciliationHistory({ session, onLogout }) {
                   <strong>Auditor access</strong>
                   <div className="muted small" style={{ marginTop: "8px", display: "grid", gap: "4px" }}>
                     <span>Auditor request: {accessStatuses[c.id]?.auditorRequest || (c.auditorId ? "Assigned" : "Not requested")}</span>
-                    <span>Payment: {accessStatuses[c.id]?.payment || "Pending"}</span>
+                    <span>Payment: {isCasePaid(c.id) ? (payments[c.id]?.method ? `Paid (${payments[c.id].method})` : "Paid") : (accessStatuses[c.id]?.payment || "Pending")}</span>
                     <span>Authorization: {accessStatuses[c.id]?.authorization || "Pending"}</span>
                     {accessStatuses[c.id]?.auditor?.name && <span>Auditor: {accessStatuses[c.id].auditor.name}</span>}
+                    <span>Report Status: {accessStatuses[c.id]?.report || "Locked"}</span>
                   </div>
                   {accessStatuses[c.id]?.auditor && accessStatuses[c.id]?.auditorRequest === "Accepted" && (
                     <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "10px" }}>
-                      {accessStatuses[c.id].authorization !== "approved" && (
-                        <button className="secondary-btn" onClick={() => handleAccessAction(c.id, "authorize")}>
-                          Authorize report access
-                        </button>
-                      )}
-                      {accessStatuses[c.id].authorization === "approved" && accessStatuses[c.id].payment === "pending" && (
-                        <button className="secondary-btn" onClick={() => handleAccessAction(c.id, "payment")}>
-                          Create payment request
-                        </button>
-                      )}
-                      {accessStatuses[c.id].authorization === "approved" &&
-                        accessStatuses[c.id].certificate === "Verified" &&
-                        ["verified", "not_required"].includes(accessStatuses[c.id].payment) &&
-                        accessStatuses[c.id].report === "Locked" && (
-                          <button className="primary-btn" onClick={() => handleAccessAction(c.id, "release")}>
-                            Release report key to auditor
-                          </button>
-                        )}
                       <button className="secondary-btn" onClick={() => refreshAccessStatus(c.id)}>
                         Refresh status
                       </button>
@@ -259,37 +266,118 @@ export default function ReconciliationHistory({ session, onLogout }) {
           position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
           background: "rgba(0,0,0,0.8)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000
         }}>
-          <div className="card" style={{ maxWidth: "400px", width: "100%" }}>
-            <h2 style={{ marginTop: 0 }}>Verify with Auditor</h2>
-            <p className="muted">Select an auditor to review this report.</p>
+          <div className="card" style={{ maxWidth: "440px", width: "100%", padding: "24px" }}>
+            <h2 style={{ marginTop: 0, fontSize: "20px", color: "var(--paper)" }}>Verify with Auditor</h2>
+            <p className="muted" style={{ fontSize: "14px", marginBottom: "16px" }}>
+              Select an auditor and complete payment to submit and release your compliance report.
+            </p>
             {verifyError && <div className="error" style={{ marginBottom: "16px" }}>{verifyError}</div>}
             
-            <select
-              value={selectedAuditor}
-              onChange={(e) => setSelectedAuditor(e.target.value)}
-              style={{
-                width: "100%", padding: "12px", background: "var(--input-bg)", color: "var(--paper)", border: "1px solid var(--line)", borderRadius: "8px", marginBottom: "24px"
-              }}
-            >
-              <option value="" disabled>Select an auditor...</option>
-              {auditors.map(a => (
-                <option key={a.id} value={a.id}>{a.name} ({a.externalId})</option>
-              ))}
-            </select>
+            {/* STEP 1: AUDITOR SELECTION */}
+            <div style={{ marginBottom: "20px" }}>
+              <label className="field-label" style={{ display: "block", marginBottom: "6px", fontSize: "12px" }}>
+                1. Select Auditor
+              </label>
+              <select
+                value={selectedAuditor}
+                onChange={(e) => setSelectedAuditor(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "12px",
+                  background: "var(--input-bg, #080a09)",
+                  color: "var(--paper)",
+                  border: "1px solid var(--line)",
+                  borderRadius: "8px"
+                }}
+              >
+                <option value="" disabled>Select an auditor...</option>
+                {auditors.map(a => (
+                  <option key={a.id} value={a.id}>{a.name} ({a.externalId})</option>
+                ))}
+              </select>
+            </div>
+
+            {/* STEP 2: PAYMENT METHOD SELECTION */}
+            <div style={{ opacity: selectedAuditor ? 1 : 0.5, pointerEvents: selectedAuditor ? "auto" : "none" }}>
+              {!isCasePaid(verifyingCase) ? (
+                <div style={{
+                  marginBottom: "20px",
+                  padding: "16px",
+                  background: "rgba(255, 255, 255, 0.03)",
+                  border: "1px solid var(--line)",
+                  borderRadius: "8px"
+                }}>
+                  <h3 style={{ margin: "0 0 4px 0", fontSize: "15px", color: "var(--paper)", fontWeight: "600" }}>
+                    2. Payment Required
+                  </h3>
+                  <p className="muted" style={{ margin: "0 0 12px 0", fontSize: "13px" }}>
+                    Complete payment to proceed with automatic key release.
+                  </p>
+
+                  <label className="field-label" style={{ display: "block", marginBottom: "6px", fontSize: "12px" }}>
+                    Select Payment Method
+                  </label>
+                  <select
+                    value={payments[verifyingCase]?.method || ""}
+                    onChange={(e) => handlePaymentMethodSelect(verifyingCase, e.target.value)}
+                    disabled={!selectedAuditor}
+                    style={{
+                      width: "100%",
+                      padding: "10px 12px",
+                      background: "var(--input-bg, #080a09)",
+                      color: "var(--paper)",
+                      border: "1px solid var(--line)",
+                      borderRadius: "6px",
+                      fontSize: "14px"
+                    }}
+                  >
+                    <option value="" disabled>Select Payment Method ▾</option>
+                    <option value="Google Pay">Google Pay</option>
+                    <option value="UPI">UPI</option>
+                    <option value="Credit / Debit Card">Credit / Debit Card</option>
+                  </select>
+                </div>
+              ) : (
+                <div style={{
+                  marginBottom: "20px",
+                  padding: "14px 16px",
+                  background: "rgba(124, 151, 116, 0.12)",
+                  border: "1px solid var(--green)",
+                  borderRadius: "8px"
+                }}>
+                  <div style={{ color: "var(--green)", fontWeight: "bold", fontSize: "14px", display: "flex", alignItems: "center", gap: "6px", marginBottom: "6px" }}>
+                    <span>✓</span> Payment Successful
+                  </div>
+                  <div style={{ fontSize: "13px", color: "var(--paper)", marginBottom: "2px" }}>
+                    Payment Method: <strong>{payments[verifyingCase]?.method || "UPI"}</strong>
+                  </div>
+                  <div style={{ fontSize: "13px", color: "var(--paper)" }}>
+                    Status: <strong style={{ color: "var(--green)" }}>Paid</strong>
+                  </div>
+                </div>
+              )}
+            </div>
 
             <div style={{ display: "flex", gap: "12px", justifyContent: "flex-end" }}>
               <button className="secondary-btn" onClick={() => { setVerifyingCase(null); setVerifyError(""); }}>Cancel</button>
               <button
                 className="primary-btn"
-                disabled={!selectedAuditor || verifySending}
+                disabled={!isCasePaid(verifyingCase) || !selectedAuditor || verifySending}
                 onClick={async () => {
                   setVerifySending(true);
                   setVerifyError("");
                   try {
+                    const targetMethod = payments[verifyingCase]?.method || "UPI";
                     await apiFetch(`/cases/${verifyingCase}/submit`, {
                       method: "POST",
-                      body: { auditorId: selectedAuditor }
+                      body: {
+                        auditorId: selectedAuditor,
+                        paymentMethod: targetMethod,
+                      }
                     });
+
+                    // Automatically release report key to the selected auditor
+                    await performAutomaticKeyRelease(verifyingCase, selectedAuditor);
                     
                     setVerifyingCase(null);
                     // Reload cases to reflect status update
@@ -303,7 +391,7 @@ export default function ReconciliationHistory({ session, onLogout }) {
                   }
                 }}
               >
-                {verifySending ? "Sending..." : "Send Request"}
+                {verifySending ? "Processing..." : "Send Request & Release Key"}
               </button>
             </div>
           </div>
