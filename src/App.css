@@ -3221,3 +3221,139 @@ p {
   border-radius: 12px;
 }
 
+/* Auditor Profile: Professional Qualifications (Certifications & Expertise) */
+.auditor-profile-qualifications {
+  margin: 20px 0 28px 0;
+}
+
+.auditor-qualifications-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.auditor-qual-card {
+  display: flex;
+  flex-direction: column;
+  background: rgba(255, 255, 255, 0.015);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 20px 22px;
+  transition: border-color 0.2s ease;
+}
+
+.auditor-qual-card:hover {
+  border-color: rgba(241, 240, 232, 0.24);
+}
+
+.auditor-qual-header {
+  margin-bottom: 16px;
+}
+
+.auditor-qual-label {
+  display: block;
+  font: 500 9px "DM Mono", monospace;
+  letter-spacing: 0.16em;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.auditor-qual-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--paper);
+}
+
+.auditor-qual-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+}
+
+.qual-certifications .auditor-qual-icon {
+  color: var(--green);
+}
+
+.qual-expertise .auditor-qual-icon {
+  color: var(--green2);
+}
+
+.auditor-qual-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-content: flex-start;
+  flex-grow: 1;
+}
+
+.auditor-qual-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 400 12px "DM Mono", monospace;
+  letter-spacing: 0.01em;
+  padding: 6px 11px;
+  border-radius: 4px;
+  line-height: 1.4;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+/* Certifications Tag */
+.auditor-qual-tag.tag-cert {
+  background: rgba(124, 151, 116, 0.06);
+  border: 1px solid rgba(124, 151, 116, 0.3);
+  color: var(--paper);
+}
+
+.auditor-qual-tag.tag-cert svg {
+  color: var(--green);
+  flex-shrink: 0;
+}
+
+.auditor-qual-tag.tag-cert:hover {
+  border-color: rgba(124, 151, 116, 0.55);
+  background: rgba(124, 151, 116, 0.1);
+}
+
+/* Expertise Tag */
+.auditor-qual-tag.tag-skill {
+  background: rgba(241, 240, 232, 0.03);
+  border: 1px solid rgba(241, 240, 232, 0.14);
+  color: var(--paper);
+}
+
+.auditor-qual-tag.tag-skill .auditor-tag-bullet {
+  color: var(--green2);
+  font-size: 10px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.auditor-qual-tag.tag-skill:hover {
+  border-color: rgba(241, 240, 232, 0.3);
+  background: rgba(241, 240, 232, 0.06);
+}
+
+@media (max-width: 768px) {
+  .auditor-qualifications-grid {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .auditor-qual-card {
+    padding: 16px 18px;
+  }
+
+  .auditor-qual-tag {
+    font-size: 11px;
+    padding: 5px 9px;
+  }
+}
+
+

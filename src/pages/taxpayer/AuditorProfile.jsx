@@ -2,6 +2,50 @@ import { useEffect, useState } from "react";
 import { apiFetch } from "../../api/client";
 import DashboardHeader from "../../components/DashboardHeader";
 
+const DEMO_AUDITOR_PROFILES = {
+  AUD001: {
+    certifications: [
+      "Certified Tax Professional",
+      "Blockchain Compliance Certification",
+      "Crypto Tax Specialist",
+    ],
+    expertise: [
+      "Crypto Taxation",
+      "TDS & 194S",
+      "Exchange Reconciliation",
+      "Blockchain Transactions",
+    ],
+  },
+  AUD002: {
+    certifications: [
+      "Chartered Accountant",
+      "Certified Blockchain Auditor",
+      "Digital Asset Tax Certification",
+    ],
+    expertise: [
+      "DeFi Transactions",
+      "Wallet & On-Chain Analysis",
+      "Crypto Audit",
+      "Tax Reconciliation",
+    ],
+  },
+};
+
+function getAuditorDetails(auditor) {
+  if (!auditor) return null;
+  if (auditor.auditorId && DEMO_AUDITOR_PROFILES[auditor.auditorId]) {
+    return DEMO_AUDITOR_PROFILES[auditor.auditorId];
+  }
+  const nameLower = (auditor.name || "").toLowerCase();
+  if (nameLower.includes("karan")) {
+    return DEMO_AUDITOR_PROFILES.AUD002;
+  }
+  if (nameLower.includes("priya")) {
+    return DEMO_AUDITOR_PROFILES.AUD001;
+  }
+  return DEMO_AUDITOR_PROFILES.AUD001;
+}
+
 export default function AuditorProfile({ auditorId, session, onLogout }) {
   const [auditor, setAuditor] = useState(null);
   const [reason, setReason] = useState("");
@@ -14,7 +58,9 @@ export default function AuditorProfile({ auditorId, session, onLogout }) {
     async function loadAuditor() {
       try {
         const auditors = await apiFetch("/auditors");
-        const found = auditors.find((item) => item.id === auditorId);
+        const found = auditors.find(
+          (item) => item.id === auditorId || item.auditorId === auditorId
+        );
 
         if (!found) {
           throw new Error("Auditor not found.");
@@ -86,6 +132,8 @@ export default function AuditorProfile({ auditorId, session, onLogout }) {
     );
   }
 
+  const details = getAuditorDetails(auditor);
+
   return (
     <div className="app app-wide">
       <DashboardHeader session={session} roleLabel="Taxpayer dashboard" onLogout={onLogout} />
@@ -102,10 +150,95 @@ export default function AuditorProfile({ auditorId, session, onLogout }) {
         <h1 style={{ margin: "0 0 8px 0", fontSize: "24px", color: "var(--paper)" }}>
           {auditor.name}
         </h1>
-        <div style={{ display: "flex", gap: "16px", marginBottom: "24px" }}>
+        <div style={{ display: "flex", gap: "16px", marginBottom: "20px" }}>
           <p className="muted" style={{ margin: 0 }}>Auditor ID: {auditor.auditorId}</p>
           <p className="muted" style={{ margin: 0 }}>Status: <span style={{ color: "var(--green)" }}>{auditor.availability}</span></p>
         </div>
+
+        {details && (
+          <div className="auditor-profile-qualifications">
+            <div className="auditor-qualifications-grid">
+              {/* Certifications Card */}
+              <div className="auditor-qual-card qual-certifications">
+                <div className="auditor-qual-header">
+                  <span className="auditor-qual-label">CREDENTIALS</span>
+                  <h2 className="auditor-qual-title">
+                    <svg
+                      className="auditor-qual-icon"
+                      width="15"
+                      height="15"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                      <path d="m9 12 2 2 4-4" />
+                    </svg>
+                    Certifications
+                  </h2>
+                </div>
+                <div className="auditor-qual-tags">
+                  {details.certifications.map((cert) => (
+                    <span key={cert} className="auditor-qual-tag tag-cert">
+                      <svg
+                        width="11"
+                        height="11"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                      >
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                      {cert}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {/* Areas of Expertise Card */}
+              <div className="auditor-qual-card qual-expertise">
+                <div className="auditor-qual-header">
+                  <span className="auditor-qual-label">SPECIALIZATION</span>
+                  <h2 className="auditor-qual-title">
+                    <svg
+                      className="auditor-qual-icon"
+                      width="15"
+                      height="15"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <polygon points="12 2 2 7 12 12 22 7 12 2" />
+                      <polyline points="2 17 12 22 22 17" />
+                      <polyline points="2 12 12 17 22 12" />
+                    </svg>
+                    Areas of Expertise
+                  </h2>
+                </div>
+                <div className="auditor-qual-tags">
+                  {details.expertise.map((item) => (
+                    <span key={item} className="auditor-qual-tag tag-skill">
+                      <span className="auditor-tag-bullet" aria-hidden="true">◇</span>
+                      {item}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         <hr />
 
