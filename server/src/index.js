@@ -17,6 +17,8 @@ import auditorRequestsRouter from "./routes/auditorRequests.js";
 import auditorRequestActionsRouter from "./routes/auditorRequestActions.js";
 import conversationsRouter from "./routes/conversations.js";
 import notificationsRouter from "./routes/notifications.js";
+import auditorKeysRouter from "./routes/auditorKeys.js";
+import reportAccessRouter from "./routes/reportAccess.js";
 
 const app = express();
 
@@ -32,7 +34,14 @@ app.use(
 app.options("*", cors());
 
 
-app.use(express.json({ limit: "50mb" }));
+app.use(express.json({
+  limit: "50mb",
+  verify: (req, res, buffer) => {
+    if (req.originalUrl.startsWith("/api/report-access/payments/webhook")) {
+      req.rawBody = Buffer.from(buffer);
+    }
+  },
+}));
 
 const API_PREFIX = "/api";
 
@@ -54,6 +63,8 @@ app.use(`${API_PREFIX}/auditor-requests`, auditorRequestsRouter);
 app.use(`${API_PREFIX}/auditor-requests`, auditorRequestActionsRouter);
 app.use(`${API_PREFIX}/conversations`, conversationsRouter);
 app.use(`${API_PREFIX}/notifications`, notificationsRouter);
+app.use(`${API_PREFIX}/auditor-keys`, auditorKeysRouter);
+app.use(`${API_PREFIX}/report-access`, reportAccessRouter);
 
 app.use((err, req, res, next) => {
   console.error("SERVER ERROR:", err);
