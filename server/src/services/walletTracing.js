@@ -1,3 +1,4 @@
+import { reliableFetch } from "../utils/reliableFetch.js";
 import { reconcileWallet } from "../../../src/utils/reconcile.js";
 import { withTransactionClassification } from "../../../src/utils/transactionClassifier.js";
 import { buildWalletOwnershipMap } from "../../../src/utils/walletOwnership.js";
@@ -382,7 +383,7 @@ function assertEthereumAddress(address) {
 async function alchemyRpc(method, params) {
   const url = getAlchemyRpcUrl();
   if (!url) throw new Error("Ethereum on-chain access is not configured. Set ALCHEMY_ETH_API_KEY or ALCHEMY_ETH_RPC_URL in server/.env.");
-  const response = await fetch(url, {
+  const response = await reliableFetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
@@ -1221,6 +1222,28 @@ export async function analyzeEthereumWallet(address, { includeNormalizedRows = f
     labels,
     dexEvents,
   });
+
+  if (includeNormalizedRows && normalizedRows) {
+    normalizedRows.forEach((row) => {
+      if (row.type === "DEPOSIT") {
+        const p1 = sourceOfFunds.incomingTransfers.find(
+          (t) => t.sourceTxHash === row.txHash && t.sourceAddress?.toLowerCase() === row.fromAddress?.toLowerCase()
+        );
+        if (p1) {
+          row.provenanceEvidence = {
+            sourceType: p1.sourceType,
+            ownershipStatus: p1.ownershipStatus,
+            evidenceStatus: p1.evidenceStatus,
+            reviewRequired: p1.reviewRequired,
+            confidence: p1.confidence,
+            reason: p1.reason,
+            evidence: p1.evidence,
+            hops: p1.hops,
+          };
+        }
+      }
+    });
+  }
 
   return {
     chain: { id: ETH_MAINNET_CHAIN_ID, name: "Ethereum Mainnet" },
